@@ -47,12 +47,11 @@ def get_args():
     parser.add_argument("--num_diffusion_iters", type=int, default=5, help="Number of diffusion steps")
     parser.add_argument('--behavior_batch', type=int, default=256)
     parser.add_argument('--load_diffusion_path', type=none_or_str, default=None)
-    # parser.add_argument('--diffusion_seed', type=str, default='0', help="Distinguish runs for diffusion policy, not random seed")
     parser.add_argument('--task_weight', type=float, default=1.4, help="Weight on task data when training diffusion policy")
     parser.add_argument('--sample_ratio', type=float, default=0.8, help="Use (sample_ratio * num_total_data) data to train diffusion policy")
     
     # Rollout 
-    parser.add_argument('--rollout_ckpt_path', type=none_or_str, default=None, help="file path, used to load/store rollout trajs" )
+    parser.add_argument('--rollout_ckpt_path', type=none_or_str, default=None, help="file dir, used to load/store rollout trajs" )
     parser.add_argument('--rollout_epoch', type=int, default=1000, help="Max number of epochs to rollout the policy")
     parser.add_argument('--num_need_traj', type=int, default=5000, help="Needed valid trajs in rollout")
     parser.add_argument("--rollout-batch", type=int, default=200, help="Number of trajs to be sampled at one time")
@@ -61,10 +60,9 @@ def get_args():
     parser.add_argument("--rcsl_hidden_dims", type=int, nargs='*', default=[200, 200, 200, 200])
     parser.add_argument("--rcsl_lr", type=float, default=1e-3)
     parser.add_argument("--rcsl_batch", type=int, default=256)
-    parser.add_argument("--rcsl_epoch", type=int, default=200)
+    parser.add_argument("--rcsl_epoch", type=int, default=100)
     parser.add_argument("--eval_episodes", type=int, default=100)
-
-    # parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument("--holdout_ratio", type=float, default=0.2)
 
     return parser.parse_args()
 
@@ -131,10 +129,7 @@ def rollout_simple(
     return rollout_transitions, \
         {"num_transitions": num_transitions, "reward_mean": rewards_arr.mean(), "returns": returns, "max_rewards": max_rewards, "rewards_full": rewards_full}
 
-
 def train(args=get_args()):
-    print(args)
-
     # seed
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -154,12 +149,14 @@ def train(args=get_args()):
 
         diff_dataset, _ = get_pickplace_dataset(args.data_dir, sample_ratio =args.sample_ratio, task_weight=args.task_weight)
         dyn_dataset, init_obss_dataset = get_pickplace_dataset(args.data_dir)
+    else:
+        raise NotImplementedError
 
     env.reset(seed=args.seed)
 
     timestamp = datetime.datetime.now().strftime("%y-%m%d-%H%M%S")
     exp_name = f"timestamp_{timestamp}&{args.seed}"
-    log_dirs = make_log_dirs(args.task, args.algo_name, exp_name, vars(args), part = "dynamics_regress")
+    log_dirs = make_log_dirs(args.task, args.algo_name, exp_name, vars(args), part = "dynamics")
     # key: output file name, value: output handler type
     print(f"Logging dynamics to {log_dirs}")
     output_config = {
@@ -370,7 +367,7 @@ def train(args=get_args()):
     lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(rcsl_policy.rcsl_optim, args.rcsl_epoch)
     
     task_name = args.task
-    rcsl_log_dirs = make_log_dirs(task_name, args.algo_name, exp_name, vars(args), part='rcsl_regress')
+    rcsl_log_dirs = make_log_dirs(task_name, args.algo_name, exp_name, vars(args), part='rcsl')
     # key: output file name, value: output handler type
     print(f"Logging autoregressive gaussian rcsl to {rcsl_log_dirs}")
     rcsl_output_config = {
@@ -398,7 +395,7 @@ def train(args=get_args()):
         eval_episodes = args.eval_episodes
     )
 
-    policy_trainer.train(last_eval=True)
+    policy_trainer.train(holdout_ratio=args.holdout_ratio, last_eval=True)
 
 
 if __name__ == "__main__":

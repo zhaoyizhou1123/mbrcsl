@@ -1,43 +1,31 @@
 # MBCQL. Need rollout data from MBRCSL
 import argparse
+import os
 import random
-
-# import gym
-# import d4rl
+import pickle
+import datetime
 import roboverse
 
 import numpy as np
 import torch
-import os
-import pickle
 
 
 from offlinerlkit.nets import MLP
 from offlinerlkit.modules import ActorProb, Critic, TanhDiagGaussian
-from offlinerlkit.utils.load_dataset import qlearning_dataset
 from offlinerlkit.buffer import ReplayBuffer
 from offlinerlkit.utils.logger import Logger, make_log_dirs
 from offlinerlkit.policy_trainer import MFPolicyTrainer
 from offlinerlkit.policy import CQLPolicy
-from offlinerlkit.utils.pickplace_utils import SimpleObsWrapper, get_pickplace_dataset
-from offlinerlkit.utils.none_or_str import none_or_str
-
-
-
-"""
-suggested hypers
-cql-weight=5.0, temperature=1.0 for all D4RL-Gym tasks
-"""
-
+from offlinerlkit.utils.pickplace_utils import SimpleObsWrapper
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--algo-name", type=str, default="cql_rollout")
+    parser.add_argument("--algo-name", type=str, default="mbcql")
     parser.add_argument("--task", type=str, default="pickplace")
+
     # env config (pickplace)
-    # parser.add_argument('--data_dir', type=str, default='./dataset')
     parser.add_argument('--horizon', type=int, default=40, help="max path length for pickplace")
-    parser.add_argument('--rollout_ckpt_path', type=none_or_str, default=None, help="./dataset/rollout-s0.dat, file path, used to load/store rollout trajs" )
+    parser.add_argument('--rollout_ckpt_path', type=str, required=True, help="dir path, used to load mbrcsl rollout trajectories" )
     parser.add_argument('--last_eval', action='store_false', help="Show eval result for every epoch if False")
 
     parser.add_argument("--seed", type=int, default=0)
@@ -68,7 +56,6 @@ def get_args():
 
     return parser.parse_args()
 
-
 def train(args=get_args()):
     # seed
     random.seed(args.seed)
@@ -76,53 +63,23 @@ def train(args=get_args()):
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
     torch.backends.cudnn.deterministic = True
-    # env.reset(seed = args.seed)
 
     # create env and dataset
-    if args.task == 'pickplace' or args.task == 'pickplace_easy':
-        # render_mode = 'human' if args.render else None
-        # env = Linearq(size_param=args.env_param)
-        # env2 = Linearq(size_param=args.env_param)
-        # # dataset = qlearning_dataset(env, get_rtg=True)
-        # dataset, init_obss_dataset, max_offline_return = traj_rtg_datasets(env)
-        # obs_space = env.observation_space
-        # args.obs_shape = (1,)
-        # print(args.obs_shape)
-        if args.task == 'pickplace':
-            env = roboverse.make('Widow250PickTray-v0')
-            env = SimpleObsWrapper(env)
-            # v_env = gym.vector.SyncVectorEnv([lambda: SimpleObsWrapper(roboverse.make('Widow250PickTray-v0')), t ) for t in range(args.rollout_batch)])
-        else:
-            print(f"Env: easy")
-            env = roboverse.make('Widow250PickTrayEasy-v0')
-            env = SimpleObsWrapper(env)
-            # v_env = gym.vector.SyncVectorEnv([lambda: reset_multi(SimpleObsWrapper(roboverse.make('Widow250PickTrayEasy-v0')), t ) for t in range(args.rollout_batch)])
+    if args.task == 'pickplace':
+        env = roboverse.make('Widow250PickTray-v0')
+        env = SimpleObsWrapper(env)
         obs_space = env.observation_space
         args.obs_shape = obs_space.shape
         args.obs_dim = np.prod(args.obs_shape)
         args.action_shape = env.action_space.shape
         args.action_dim = np.prod(args.action_shape)
 
-        # offline_dataset, init_obss_dataset = get_pickplace_dataset(args.data_dir, task_weight=args.task_weight)
-        # diff_dataset, _ = get_pickplace_dataset(args.data_dir, sample_ratio =args.sample_ratio, task_weight=args.task_weight)
-        # dyn_dataset, init_obss_dataset = get_pickplace_dataset(args.data_dir)
-        # dataset, init_obss_dataset = get_pickplace_dataset(args.data_dir)
-        if args.rollout_ckpt_path is not None:
-            # print(f"Will save rollout trajectories to dir {args.rollout_ckpt_path}")
-            # os.makedirs(args.rollout_ckpt_path, exist_ok=True)
-            # data_path = os.path.join(args.rollout_ckpt_path, "rollout.dat")
-            # if os.path.exists(data_path): # Load ckpt_data
-            ckpt_dict = pickle.load(open(args.rollout_ckpt_path,"rb")) # checkpoint in dict type
-            rollout_data_all = ckpt_dict['data'] # should be dict
-            num_traj_all = ckpt_dict['num_traj']
-            # returns_all = ckpt_dict['return']
-            # start_epoch = ckpt_dict['epoch'] + 1
-            # trajs = ckpt_dict
-            print(f"Loaded checkpoint. Collected {num_traj_all} valid trajectories.")
-        else:
-            raise NotImplementedError
-        # args.max_action = env.action_space.high[0]
-        # print(args.action_dim, type(args.action_dim
+        data_path = os.path.join(args.rollout_ckpt_path, "rollout.dat")
+        ckpt_dict = pickle.load(open(data_path,"rb")) # checkpoint in dict type
+        
+        rollout_data_all = ckpt_dict['data'] # should be dict
+        num_traj_all = ckpt_dict['num_traj']
+        print(f"Loaded {num_traj_all} rollout trajectories")
 
     env.reset(seed=args.seed)
 
@@ -189,7 +146,9 @@ def train(args=get_args()):
     buffer.load_dataset(rollout_data_all)
 
     # log
-    log_dirs = make_log_dirs(args.task, args.algo_name, args.seed, vars(args))
+    timestamp = datetime.datetime.now().strftime("%y-%m%d-%H%M%S")
+    exp_name = f"timestamp_{timestamp}&{args.seed}"
+    log_dirs = make_log_dirs(args.task, args.algo_name, exp_name, vars(args))
     # key: output file name, value: output handler type
     output_config = {
         "consoleout_backup": "stdout",

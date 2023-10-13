@@ -96,6 +96,10 @@ class AutoregressivePolicy(nn.Module):
         for layer in self.model:
             x = layer(x)
         mean, logstd = torch.chunk(x, 2, dim=-1)
+        if any(torch.isnan(mean)):
+            torch.save(self.model.state_dict(), "model_debug.pth")
+            torch.save(input_full, "input_debug.pth")
+            raise Exception(f"Mean is nan, input_full {input_full.detach().cpu().numpy()}")
         dist = Normal(mean, logstd.exp())
         loss = -dist.log_prob(target)
         if weights is None:

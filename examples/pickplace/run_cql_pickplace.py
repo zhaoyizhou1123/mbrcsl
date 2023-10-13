@@ -1,8 +1,8 @@
 import argparse
+import os
+import sys
 import random
-
-# import gym
-# import d4rl
+import datetime
 import roboverse
 
 import numpy as np
@@ -11,26 +11,19 @@ import torch
 
 from offlinerlkit.nets import MLP
 from offlinerlkit.modules import ActorProb, Critic, TanhDiagGaussian
-from offlinerlkit.utils.load_dataset import qlearning_dataset
 from offlinerlkit.buffer import ReplayBuffer
 from offlinerlkit.utils.logger import Logger, make_log_dirs
 from offlinerlkit.policy_trainer import MFPolicyTrainer
 from offlinerlkit.policy import CQLPolicy
 from offlinerlkit.utils.pickplace_utils import SimpleObsWrapper, get_pickplace_dataset
 
-
-"""
-suggested hypers
-cql-weight=5.0, temperature=1.0 for all D4RL-Gym tasks
-"""
-
-
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--algo-name", type=str, default="cql")
     parser.add_argument("--task", type=str, default="pickplace")
+    
     # env config (pickplace)
-    parser.add_argument('--data_dir', type=str, default='./dataset')
+    parser.add_argument('--data_dir', type=str, required=True)
     parser.add_argument('--horizon', type=int, default=40, help="max path length for pickplace")
 
     parser.add_argument("--seed", type=int, default=0)
@@ -44,7 +37,7 @@ def get_args():
     parser.add_argument("--auto-alpha", default=True)
     parser.add_argument("--alpha-lr", type=float, default=1e-4)
 
-    parser.add_argument("--cql-weight", type=float, default=5.0)
+    parser.add_argument("--cql-weight", type=float, default=0.5)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--max-q-backup", type=bool, default=False)
     parser.add_argument("--deterministic-backup", type=bool, default=True)
@@ -55,7 +48,7 @@ def get_args():
     
     parser.add_argument("--epoch", type=int, default=200)
     parser.add_argument("--step-per-epoch", type=int, default=1000)
-    parser.add_argument("--eval_episodes", type=int, default=10)
+    parser.add_argument("--eval_episodes", type=int, default=100)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
 
@@ -69,40 +62,19 @@ def train(args=get_args()):
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
     torch.backends.cudnn.deterministic = True
-    # env.reset(seed = args.seed)
 
     # create env and dataset
-    if args.task == 'pickplace' or args.task == 'pickplace_easy':
-        # render_mode = 'human' if args.render else None
-        # env = Linearq(size_param=args.env_param)
-        # env2 = Linearq(size_param=args.env_param)
-        # # dataset = qlearning_dataset(env, get_rtg=True)
-        # dataset, init_obss_dataset, max_offline_return = traj_rtg_datasets(env)
-        # obs_space = env.observation_space
-        # args.obs_shape = (1,)
-        # print(args.obs_shape)
-        if args.task == 'pickplace':
-            env = roboverse.make('Widow250PickTray-v0')
-            env = SimpleObsWrapper(env)
-            # v_env = gym.vector.SyncVectorEnv([lambda: SimpleObsWrapper(roboverse.make('Widow250PickTray-v0')), t ) for t in range(args.rollout_batch)])
-        else:
-            print(f"Env: easy")
-            env = roboverse.make('Widow250PickTrayEasy-v0')
-            env = SimpleObsWrapper(env)
-            # v_env = gym.vector.SyncVectorEnv([lambda: reset_multi(SimpleObsWrapper(roboverse.make('Widow250PickTrayEasy-v0')), t ) for t in range(args.rollout_batch)])
+    if args.task == 'pickplace':
+        env = roboverse.make('Widow250PickTray-v0')
+        env = SimpleObsWrapper(env)
         obs_space = env.observation_space
         args.obs_shape = obs_space.shape
         args.obs_dim = np.prod(args.obs_shape)
         args.action_shape = env.action_space.shape
         args.action_dim = np.prod(args.action_shape)
-
-        # offline_dataset, init_obss_dataset = get_pickplace_dataset(args.data_dir, task_weight=args.task_weight)
-        # diff_dataset, _ = get_pickplace_dataset(args.data_dir, sample_ratio =args.sample_ratio, task_weight=args.task_weight)
-        # dyn_dataset, init_obss_dataset = get_pickplace_dataset(args.data_dir)
         dataset, init_obss_dataset = get_pickplace_dataset(args.data_dir)
-        # args.max_action = env.action_space.high[0]
-        # print(args.action_dim, type(args.action_dim
-
+    else:
+        raise NotImplementedError
     env.reset(seed=args.seed)
 
     # create policy model
@@ -168,7 +140,9 @@ def train(args=get_args()):
     buffer.load_dataset(dataset)
 
     # log
-    log_dirs = make_log_dirs(args.task, args.algo_name, args.seed, vars(args))
+    timestamp = datetime.datetime.now().strftime("%y-%m%d-%H%M%S")
+    exp_name = f"timestamp_{timestamp}&{args.seed}"
+    log_dirs = make_log_dirs(args.task, args.algo_name, exp_name, vars(args))
     # key: output file name, value: output handler type
     output_config = {
         "consoleout_backup": "stdout",

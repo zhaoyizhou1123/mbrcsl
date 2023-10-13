@@ -2,44 +2,24 @@ import argparse
 import os
 import sys
 import random
-
-# import gym
-# import d4rl
+import datetime
 import roboverse
 
 import numpy as np
 import torch
 
 
-# import __init__
 from offlinerlkit.nets import MLP
 from offlinerlkit.modules import ActorProb, Critic, TanhDiagGaussian, EnsembleDynamicsModel
 from offlinerlkit.dynamics import EnsembleDynamics
 from offlinerlkit.utils.scaler import StandardScaler
 from offlinerlkit.utils.termination_fns import get_termination_fn
-from offlinerlkit.utils.load_dataset import qlearning_dataset
 from offlinerlkit.buffer import ReplayBuffer
 from offlinerlkit.utils.logger import Logger, make_log_dirs
 from offlinerlkit.policy_trainer import MBPolicyTrainer
 from offlinerlkit.policy import COMBOPolicy
 from offlinerlkit.utils.pickplace_utils import SimpleObsWrapper, get_pickplace_dataset
 from offlinerlkit.utils.none_or_str import none_or_str
-# from pointmaze.utils.trajectory import Trajs2Dict
-
-
-"""
-suggested hypers
-
-halfcheetah-medium-v2: rollout-length=5, cql-weight=0.5
-hopper-medium-v2: rollout-length=5, cql-weight=5.0
-walker2d-medium-v2: rollout-length=1, cql-weight=5.0
-halfcheetah-medium-replay-v2: rollout-length=5, cql-weight=0.5
-hopper-medium-replay-v2: rollout-length=5, cql-weight=0.5
-walker2d-medium-replay-v2: rollout-length=1, cql-weight=0.5
-halfcheetah-medium-expert-v2: rollout-length=5, cql-weight=5.0
-hopper-medium-expert-v2: rollout-length=5, cql-weight=5.0
-walker2d-medium-expert-v2: rollout-length=1, cql-weight=5.0
-"""
 
 
 def get_args():
@@ -48,19 +28,8 @@ def get_args():
     parser.add_argument("--task", type=str, default="pickplace", help="pickplace") # Self-constructed environment
 
     # env config (pickplace)
-    parser.add_argument('--data_dir', type=str, default='./dataset')
+    parser.add_argument('--data_dir', type=str, required=True)
     parser.add_argument('--horizon', type=int, default=40, help="max path length for pickplace")
-
-    # parser.add_argument('--maze_config_file', type=str, default='./pointmaze/config/maze2_simple_moredata.json')
-    # parser.add_argument('--data_file', type=str, default='./pointmaze/dataset/maze2_smds_acc.dat')
-    # parser.add_argument('--debug',action='store_true', help='Print debuuging info if true')
-    # parser.add_argument('--render', action='store_true')
-    # # parser.add_argument('--log_to_wandb',action='store_true', help='Set up wandb')
-    # # parser.add_argument('--tb_path', type=str, default=None, help="./logs/stitch/, Folder to tensorboard logs" )
-    # parser.add_argument('--env_type', type=str, default='pointmaze', help='pointmaze or ?')
-    # parser.add_argument('--algo', type=str, default='stitch-mlp', help="rcsl-mlp, rcsl-dt or stitch-mlp, stitch-dt")
-    # parser.add_argument('--horizon', type=int, default=200, help="Should be consistent with dataset")
-
 
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--actor-lr", type=float, default=1e-4)
@@ -106,51 +75,26 @@ def get_args():
 
 
 def train(args=get_args()):
-    print(args)
     # seed
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
     torch.backends.cudnn.deterministic = True
-    # env.reset(seed = args.seed)
 
     # create env and dataset
-    if args.task == 'pickplace' or args.task == 'pickplace_easy':
-        # render_mode = 'human' if args.render else None
-        # env = Linearq(size_param=args.env_param)
-        # env2 = Linearq(size_param=args.env_param)
-        # # dataset = qlearning_dataset(env, get_rtg=True)
-        # dataset, init_obss_dataset, max_offline_return = traj_rtg_datasets(env)
-        # obs_space = env.observation_space
-        # args.obs_shape = (1,)
-        # print(args.obs_shape)
-        if args.task == 'pickplace':
-            env = roboverse.make('Widow250PickTray-v0')
-            env = SimpleObsWrapper(env)
-            # v_env = gym.vector.SyncVectorEnv([lambda: SimpleObsWrapper(roboverse.make('Widow250PickTray-v0')), t ) for t in range(args.rollout_batch)])
-        else:
-            print(f"Env: easy")
-            env = roboverse.make('Widow250PickTrayEasy-v0')
-            env = SimpleObsWrapper(env)
-            # v_env = gym.vector.SyncVectorEnv([lambda: reset_multi(SimpleObsWrapper(roboverse.make('Widow250PickTrayEasy-v0')), t ) for t in range(args.rollout_batch)])
+    if args.task == 'pickplace':
+        env = roboverse.make('Widow250PickTray-v0')
+        env = SimpleObsWrapper(env)
         obs_space = env.observation_space
         args.obs_shape = obs_space.shape
         args.obs_dim = np.prod(args.obs_shape)
         args.action_shape = env.action_space.shape
         args.action_dim = np.prod(args.action_shape)
-
-        # offline_dataset, init_obss_dataset = get_pickplace_dataset(args.data_dir, task_weight=args.task_weight)
-        # diff_dataset, _ = get_pickplace_dataset(args.data_dir, sample_ratio =args.sample_ratio, task_weight=args.task_weight)
-        # dyn_dataset, init_obss_dataset = get_pickplace_dataset(args.data_dir)
         dataset, init_obss_dataset = get_pickplace_dataset(args.data_dir)
-        # args.max_action = env.action_space.high[0]
-        # print(args.action_dim, type(args.action_dim
-
+    else:
+        raise NotImplementedError
     env.reset(seed=args.seed)
-
-    # if hasattr(env, 'seed'):
-    #     env.seed(args.seed)
 
     # create policy model
     actor_backbone = MLP(input_dim=np.prod(args.obs_shape), hidden_dims=args.hidden_dims)
@@ -256,7 +200,9 @@ def train(args=get_args()):
     )
 
     # log
-    log_dirs = make_log_dirs(args.task, args.algo_name, args.seed, vars(args))
+    timestamp = datetime.datetime.now().strftime("%y-%m%d-%H%M%S")
+    exp_name = f"timestamp_{timestamp}&{args.seed}"
+    log_dirs = make_log_dirs(args.task, args.algo_name, exp_name, vars(args))
     # key: output file name, value: output handler type
     output_config = {
         "consoleout_backup": "stdout",
