@@ -3,6 +3,7 @@
 **/.DS_STORE
 **/log
 logs
+logs_scp/
 **/build
 **/dist
 **/*.egg-info

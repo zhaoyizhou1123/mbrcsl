@@ -4,7 +4,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 from typing import Dict, List, Union, Tuple, Optional
 from offlinerlkit.nets import EnsembleLinear
-
+from offlinerlkit.utils.soft_clamp import soft_clamp
 
 class Swish(nn.Module):
     # Activation function
@@ -14,19 +14,6 @@ class Swish(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x * torch.sigmoid(x)
         return x
-
-
-def soft_clamp(
-    x : torch.Tensor,
-    _min: Optional[torch.Tensor] = None,
-    _max: Optional[torch.Tensor] = None
-) -> torch.Tensor:
-    # clamp tensor values while mataining the gradient
-    if _max is not None:
-        x = _max - F.softplus(_max - x)
-    if _min is not None:
-        x = _min + F.softplus(x - _min)
-    return x
 
 
 class EnsembleDynamicsModel(nn.Module):

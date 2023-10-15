@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from offlinerlkit.utils.soft_clamp import soft_clamp
 
 
 class Swish(nn.Module):
@@ -10,16 +11,6 @@ class Swish(nn.Module):
     def forward(self, x):
         x = x * torch.sigmoid(x)
         return x
-
-
-def soft_clamp(x : torch.Tensor, _min=None, _max=None):
-    # clamp tensor values while mataining the gradient
-    if _max is not None:
-        x = _max - F.softplus(_max - x)
-    if _min is not None:
-        x = _min + F.softplus(x - _min)
-    return x
-
 
 class ResBlock(nn.Module):
     def __init__(

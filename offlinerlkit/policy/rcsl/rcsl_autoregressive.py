@@ -4,6 +4,7 @@ import torch.optim as optim
 from torch.distributions import Normal
 from typing import Dict
 import numpy as np
+from offlinerlkit.utils.soft_clamp import soft_clamp
 
 
 class AutoregressivePolicy(nn.Module):
@@ -23,7 +24,15 @@ class AutoregressivePolicy(nn.Module):
 
         self.rcsl_optim = torch.optim.Adam(self.model.parameters(), lr=lr)
         self.device = device
-        self.model = self.model.to(self.device)
+        self.register_parameter(
+            "max_logstd",
+            nn.Parameter(torch.ones(1) * 0.5, requires_grad=True)
+        )
+        self.register_parameter(
+            "min_logstd",
+            nn.Parameter(torch.ones(1) * -10, requires_grad=True)
+        )
+        self.to(self.device)
 
     def forward(self, obs, rtg, deterministic: bool = False):
         batch_size = obs.size(0)
@@ -42,6 +51,7 @@ class AutoregressivePolicy(nn.Module):
             for layer in self.model:
                 x = layer(x)
             mean, logstd = torch.chunk(x, 2, dim=-1)
+            logstd = soft_clamp(logstd, self.min_logstd, self.max_logstd)
 
             # logstd might be too small
             if deterministic:
@@ -96,6 +106,7 @@ class AutoregressivePolicy(nn.Module):
         for layer in self.model:
             x = layer(x)
         mean, logstd = torch.chunk(x, 2, dim=-1)
+        logstd = soft_clamp(logstd, self.min_logstd, self.max_logstd)
         if any(torch.isnan(mean)):
             torch.save(self.model.state_dict(), "model_debug.pth")
             torch.save(input_full, "input_debug.pth")
