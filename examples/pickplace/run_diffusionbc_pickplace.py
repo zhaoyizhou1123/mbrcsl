@@ -3,26 +3,36 @@ import random
 import datetime
 from copy import deepcopy
 from typing import Dict, Tuple
+import os
 import roboverse
 
 import numpy as np
 import torch
 
-from offlinerlkit.utils.pickplace_utils import SimpleObsWrapper, get_pickplace_dataset
+from offlinerlkit.utils.roboverse_utils import PickPlaceObsWrapper, DoubleDrawerObsWrapper, get_pickplace_dataset, get_doubledrawer_dataset
 from offlinerlkit.utils.logger import Logger, make_log_dirs
 from offlinerlkit.policy_trainer import RcslPolicyTrainer
 from offlinerlkit.utils.none_or_str import none_or_str
 from offlinerlkit.policy import SimpleDiffusionPolicy
 
+'''
+task:
+pickplace
+doubledraweropen
+doubledrawercloseopen
+doubledrawerpickplaceopen
+'''
+
 def get_args():
     parser = argparse.ArgumentParser()
     # general
     parser.add_argument("--algo-name", type=str, default="diffusionbc")
-    parser.add_argument("--task", type=str, default="pickplace", help="maze") # Self-constructed environment
+    parser.add_argument("--task", type=str, default="pickplace", help="task name")
     parser.add_argument('--debug',action='store_true', help='Print debuuging info if true')
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--num_workers", type=int, default=1, help="Dataloader workers, align with cpu number")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--last_eval", action="store_false")
 
     # env config (pickplace)
     parser.add_argument('--data_dir', type=str, required=True)
@@ -49,12 +59,32 @@ def train(args=get_args()):
     # create env and dataset
     if args.task == 'pickplace':
         env = roboverse.make('Widow250PickTray-v0')
-        env = SimpleObsWrapper(env)
+        env = PickPlaceObsWrapper(env)
+        obs_space = env.observation_space
+        args.obs_shape = obs_space.shape
+        args.action_shape = env.action_space.shape
+        
+        prior_data_path = os.path.join(args.data_dir, "pickplace_prior.npy")
+        task_data_path = os.path.join(args.data_dir, "pickplace_task.npy")
+
+        dataset, _ = get_pickplace_dataset(
+            prior_data_path=prior_data_path,
+            task_data_path=task_data_path,
+            task_weight=args.task_weight)
+    elif args.task == 'doubledraweropen':
+        env = roboverse.make('Widow250DoubleDrawerOpenGraspNeutral-v0')
+        env = DoubleDrawerObsWrapper(env)
         obs_space = env.observation_space
         args.obs_shape = obs_space.shape
         args.action_shape = env.action_space.shape
 
-        dataset, init_obss = get_pickplace_dataset(args.data_dir, task_weight=args.task_weight)
+        prior_data_path = os.path.join(args.data_dir, "closed_drawer_prior.npy")
+        task_data_path = os.path.join(args.data_dir, "drawer_task.npy")
+
+        dataset, _ = get_doubledrawer_dataset(
+            prior_data_path=prior_data_path,
+            task_data_path=task_data_path, 
+            task_weight=args.task_weight)
     else:
         raise NotImplementedError
     diffusion_policy = SimpleDiffusionPolicy(
@@ -106,7 +136,7 @@ def train(args=get_args()):
         has_terminal = False,
         eval_episodes = args.eval_episodes
     )
-    policy_trainer.train(last_eval=True)
+    policy_trainer.train(last_eval=args.last_eval)
 
 
 if __name__ == "__main__":

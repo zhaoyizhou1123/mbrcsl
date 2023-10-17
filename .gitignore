@@ -16,6 +16,6 @@ logs_scp/
 *.sbatch
 scripts/
 !backup/*.out
-test.py
+test*.py
 dataset/
 *_debug.pth

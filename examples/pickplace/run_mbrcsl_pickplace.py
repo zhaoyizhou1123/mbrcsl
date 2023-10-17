@@ -13,19 +13,25 @@ import datetime
 
 from offlinerlkit.modules import TransformerDynamicsModel
 from offlinerlkit.dynamics import TransformerDynamics
-from offlinerlkit.utils.pickplace_utils import SimpleObsWrapper, get_pickplace_dataset
+from offlinerlkit.utils.roboverse_utils import PickPlaceObsWrapper, DoubleDrawerObsWrapper, get_pickplace_dataset, get_doubledrawer_dataset
 from offlinerlkit.utils.logger import Logger, make_log_dirs
 from offlinerlkit.policy_trainer import RcslPolicyTrainer, DiffusionPolicyTrainer
 from offlinerlkit.utils.none_or_str import none_or_str
 from offlinerlkit.policy import SimpleDiffusionPolicy, AutoregressivePolicy
 
+'''
+task:
+pickplace
+doubledraweropen
+doubledrawercloseopen
+doubledrawerpickplaceopen
+'''
+
 def get_args():
     parser = argparse.ArgumentParser()
     # general
     parser.add_argument("--algo-name", type=str, default="mbrcsl")
-    parser.add_argument("--task", type=str, default="pickplace", help="pickplace") # Self-constructed environment
-    # parser.add_argument("--dataset", type=none_or_str, default=None, help="../D4RL/dataset/halfcheetah/output.hdf5") # Self-constructed environment
-    # parser.add_argument('--debug',action='store_true', help='Print debuuging info if true')
+    parser.add_argument("--task", type=str, default="pickplace", help="task name")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--num_workers", type=int, default=1, help="Dataloader workers, align with cpu number")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
@@ -140,15 +146,64 @@ def train(args=get_args()):
     # create env and dataset
     if args.task == 'pickplace':
         env = roboverse.make('Widow250PickTray-v0')
-        env = SimpleObsWrapper(env)
+        env = PickPlaceObsWrapper(env)
         obs_space = env.observation_space
         args.obs_shape = obs_space.shape
         obs_dim = np.prod(args.obs_shape)
         args.action_shape = env.action_space.shape
         action_dim = np.prod(args.action_shape)
 
-        diff_dataset, _ = get_pickplace_dataset(args.data_dir, sample_ratio =args.sample_ratio, task_weight=args.task_weight)
-        dyn_dataset, init_obss_dataset = get_pickplace_dataset(args.data_dir)
+        prior_data_path = os.path.join(args.data_dir, "pickplace_prior.npy")
+        task_data_path = os.path.join(args.data_dir, "pickplace_task.npy")
+
+        diff_dataset, _ = get_pickplace_dataset(
+            prior_data_path=prior_data_path,
+            task_data_path=task_data_path,
+            sample_ratio =args.sample_ratio, 
+            task_weight=args.task_weight)
+        dyn_dataset, init_obss_dataset = get_pickplace_dataset(
+            prior_data_path=prior_data_path,
+            task_data_path=task_data_path)
+    elif args.task == 'doubledraweropen':
+        env = roboverse.make('Widow250DoubleDrawerOpenGraspNeutral-v0')
+        env = DoubleDrawerObsWrapper(env)
+        obs_space = env.observation_space
+        args.obs_shape = obs_space.shape
+        obs_dim = np.prod(args.obs_shape)
+        args.action_shape = env.action_space.shape
+        action_dim = np.prod(args.action_shape)
+
+        prior_data_path = os.path.join(args.data_dir, "closed_drawer_prior.npy")
+        task_data_path = os.path.join(args.data_dir, "drawer_task.npy")
+
+        diff_dataset, _ = get_doubledrawer_dataset(
+            prior_data_path=prior_data_path,
+            task_data_path=task_data_path,
+            sample_ratio =args.sample_ratio, 
+            task_weight=args.task_weight)
+        dyn_dataset, init_obss_dataset = get_doubledrawer_dataset(
+            prior_data_path=prior_data_path,
+            task_data_path=task_data_path)
+    elif args.task == 'doubledrawercloseopen':
+        env = roboverse.make('Widow250DoubleDrawerCloseOpenGraspNeutral-v0')
+        env = DoubleDrawerObsWrapper(env)
+        obs_space = env.observation_space
+        args.obs_shape = obs_space.shape
+        obs_dim = np.prod(args.obs_shape)
+        args.action_shape = env.action_space.shape
+        action_dim = np.prod(args.action_shape)
+
+        prior_data_path = os.path.join(args.data_dir, "blocked_drawer_1_prior.npy")
+        task_data_path = os.path.join(args.data_dir, "drawer_task.npy")
+
+        diff_dataset, _ = get_doubledrawer_dataset(
+            prior_data_path=prior_data_path,
+            task_data_path=task_data_path,
+            sample_ratio =args.sample_ratio, 
+            task_weight=args.task_weight)
+        dyn_dataset, init_obss_dataset = get_doubledrawer_dataset(
+            prior_data_path=prior_data_path,
+            task_data_path=task_data_path)
     else:
         raise NotImplementedError
 
