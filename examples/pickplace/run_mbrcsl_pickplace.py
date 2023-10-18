@@ -35,6 +35,7 @@ def get_args():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--num_workers", type=int, default=1, help="Dataloader workers, align with cpu number")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--last_eval", action="store_false")
 
     # env config (pickplace)
     parser.add_argument('--data_dir', type=str, required=True)
@@ -450,7 +451,7 @@ def train(args=get_args()):
         eval_episodes = args.eval_episodes
     )
 
-    policy_trainer.train(holdout_ratio=args.holdout_ratio, last_eval=True)
+    policy_trainer.train(holdout_ratio=args.holdout_ratio, last_eval=args.last_eval)
 
 
 if __name__ == "__main__":

@@ -149,7 +149,7 @@ class TransformerDynamics(BaseDynamics):
     def save(self, save_path: str) -> None:
         torch.save(self.model.state_dict(), os.path.join(save_path, "dynamics.pth"))
     
-    def load(self, load_path: str, load_type = 'all') -> None:
+    def load(self, load_path: str) -> None:
         '''
         load_type: 'all', 'obs', 'r'
         '''

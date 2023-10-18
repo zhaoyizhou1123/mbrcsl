@@ -15,7 +15,7 @@ from offlinerlkit.buffer import ReplayBuffer
 from offlinerlkit.utils.logger import Logger, make_log_dirs
 from offlinerlkit.policy_trainer import MFPolicyTrainer
 from offlinerlkit.policy import CQLPolicy
-from offlinerlkit.utils.pickplace_utils import SimpleObsWrapper, get_pickplace_dataset
+from offlinerlkit.utils.roboverse_utils import PickPlaceObsWrapper, DoubleDrawerObsWrapper, get_pickplace_dataset, get_doubledrawer_dataset
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -66,13 +66,48 @@ def train(args=get_args()):
     # create env and dataset
     if args.task == 'pickplace':
         env = roboverse.make('Widow250PickTray-v0')
-        env = SimpleObsWrapper(env)
+        env = PickPlaceObsWrapper(env)
         obs_space = env.observation_space
         args.obs_shape = obs_space.shape
         args.obs_dim = np.prod(args.obs_shape)
         args.action_shape = env.action_space.shape
         args.action_dim = np.prod(args.action_shape)
-        dataset, init_obss_dataset = get_pickplace_dataset(args.data_dir)
+
+        prior_data_path = os.path.join(args.data_dir, "pickplace_prior.npy")
+        task_data_path = os.path.join(args.data_dir, "pickplace_task.npy")
+        dataset, init_obss_dataset = get_pickplace_dataset(
+            prior_data_path=prior_data_path,
+            task_data_path=task_data_path)
+    elif args.task == 'doubledraweropen':
+        env = roboverse.make('Widow250DoubleDrawerOpenGraspNeutral-v0')
+        env = DoubleDrawerObsWrapper(env)
+        obs_space = env.observation_space
+        args.obs_shape = obs_space.shape
+        args.obs_dim = np.prod(args.obs_shape)
+        args.action_shape = env.action_space.shape
+        args.action_dim = np.prod(args.action_shape)
+
+        prior_data_path = os.path.join(args.data_dir, "closed_drawer_prior.npy")
+        task_data_path = os.path.join(args.data_dir, "drawer_task.npy")
+
+        dataset, init_obss_dataset = get_doubledrawer_dataset(
+            prior_data_path=prior_data_path,
+            task_data_path=task_data_path)
+    elif args.task == 'doubledrawercloseopen':
+        env = roboverse.make('Widow250DoubleDrawerCloseOpenGraspNeutral-v0')
+        env = DoubleDrawerObsWrapper(env)
+        obs_space = env.observation_space
+        args.obs_shape = obs_space.shape
+        args.obs_dim = np.prod(args.obs_shape)
+        args.action_shape = env.action_space.shape
+        args.action_dim = np.prod(args.action_shape)
+
+        prior_data_path = os.path.join(args.data_dir, "blocked_drawer_1_prior.npy")
+        task_data_path = os.path.join(args.data_dir, "drawer_task.npy")
+
+        dataset, init_obss_dataset = get_doubledrawer_dataset(
+            prior_data_path=prior_data_path,
+            task_data_path=task_data_path)
     else:
         raise NotImplementedError
     env.reset(seed=args.seed)
