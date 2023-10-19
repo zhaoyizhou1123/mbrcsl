@@ -16,7 +16,6 @@ from offlinerlkit.utils.none_or_str import none_or_str
 from offlinerlkit.policy import SimpleDiffusionPolicy
 
 '''
-task:
 pickplace
 doubledraweropen
 doubledrawercloseopen

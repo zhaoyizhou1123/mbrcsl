@@ -13,7 +13,6 @@ import datetime
 
 from offlinerlkit.modules import TransformerDynamicsModel
 from offlinerlkit.dynamics import TransformerDynamics
-from offlinerlkit.utils.roboverse_utils import PickPlaceObsWrapper, DoubleDrawerObsWrapper, get_pickplace_dataset, get_doubledrawer_dataset
 from offlinerlkit.utils.logger import Logger, make_log_dirs
 from offlinerlkit.policy_trainer import RcslPolicyTrainer, DiffusionPolicyTrainer
 from offlinerlkit.utils.none_or_str import none_or_str
@@ -23,26 +22,27 @@ from envs.pointmaze.utils.trajectory import get_pointmaze_dataset
 from envs.pointmaze.utils.maze_utils import PointMazeObsWrapper
 
 '''
-Recommended hyperparameters:
-pickplace, horizon=40, behavior_epoch=30
-doubledraweropen, horizon=50, behavior_epoch=40
-doubledrawercloseopen
-doubledrawerpickplaceopen
+task:
+pointmaze
 '''
 
 def get_args():
     parser = argparse.ArgumentParser()
     # general
     parser.add_argument("--algo-name", type=str, default="mbrcsl")
-    parser.add_argument("--task", type=str, default="pickplace", help="task name")
+    parser.add_argument("--task", type=str, default="pointmaze", help="task name")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--num_workers", type=int, default=1, help="Dataloader workers, align with cpu number")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--last_eval", action="store_false")
 
-    # env config
+    # env config (general)
     parser.add_argument('--data_dir', type=str, required=True)
     parser.add_argument('--horizon', type=int, default=40, help="max path length for pickplace")
+
+    # env config (pointmaze)
+    parser.add_argument('--maze_config_file', type=str, default='envs/pointmaze/config/maze_default.json')
+    parser.add_argument('--data_file', type=str, default='pointmaze.dat')
 
     # transformer_autoregressive dynamics
     parser.add_argument("--n_layer", type=int, default=4)
@@ -109,6 +109,7 @@ def rollout_simple(
     for t in range(rollout_length):
         actions = rollout_policy.select_action(observations, goal)
         next_observations, rewards, terminals, info = dynamics.step(observations, actions)
+        # rewards = rewards.clip(0,2) # set rewards in [0,2]
         rollout_transitions["observations"].append(observations)
         rollout_transitions["next_observations"].append(next_observations)
         rollout_transitions["actions"].append(actions)
@@ -147,66 +148,18 @@ def train(args=get_args()):
     torch.backends.cudnn.deterministic = True
 
     # create env and dataset
-    if args.task == 'pickplace':
-        env = roboverse.make('Widow250PickTray-v0')
-        env = PickPlaceObsWrapper(env)
+    if args.task == 'pointmaze':
+        env, trajs = create_env_dataset(args)
+        env = PointMazeObsWrapper(env)
         obs_space = env.observation_space
         args.obs_shape = obs_space.shape
         obs_dim = np.prod(args.obs_shape)
         args.action_shape = env.action_space.shape
         action_dim = np.prod(args.action_shape)
-
-        prior_data_path = os.path.join(args.data_dir, "pickplace_prior.npy")
-        task_data_path = os.path.join(args.data_dir, "pickplace_task.npy")
-
-        diff_dataset, _ = get_pickplace_dataset(
-            prior_data_path=prior_data_path,
-            task_data_path=task_data_path,
-            sample_ratio =args.sample_ratio, 
-            task_weight=args.task_weight)
-        dyn_dataset, init_obss_dataset = get_pickplace_dataset(
-            prior_data_path=prior_data_path,
-            task_data_path=task_data_path)
-    elif args.task == 'doubledraweropen':
-        env = roboverse.make('Widow250DoubleDrawerOpenGraspNeutral-v0')
-        env = DoubleDrawerObsWrapper(env)
-        obs_space = env.observation_space
-        args.obs_shape = obs_space.shape
-        obs_dim = np.prod(args.obs_shape)
-        args.action_shape = env.action_space.shape
-        action_dim = np.prod(args.action_shape)
-
-        prior_data_path = os.path.join(args.data_dir, "closed_drawer_prior.npy")
-        task_data_path = os.path.join(args.data_dir, "drawer_task.npy")
-
-        diff_dataset, _ = get_doubledrawer_dataset(
-            prior_data_path=prior_data_path,
-            task_data_path=task_data_path,
-            sample_ratio =args.sample_ratio, 
-            task_weight=args.task_weight)
-        dyn_dataset, init_obss_dataset = get_doubledrawer_dataset(
-            prior_data_path=prior_data_path,
-            task_data_path=task_data_path)
-    elif args.task == 'doubledrawercloseopen':
-        env = roboverse.make('Widow250DoubleDrawerCloseOpenGraspNeutral-v0')
-        env = DoubleDrawerObsWrapper(env)
-        obs_space = env.observation_space
-        args.obs_shape = obs_space.shape
-        obs_dim = np.prod(args.obs_shape)
-        args.action_shape = env.action_space.shape
-        action_dim = np.prod(args.action_shape)
-
-        prior_data_path = os.path.join(args.data_dir, "blocked_drawer_1_prior.npy")
-        task_data_path = os.path.join(args.data_dir, "drawer_task.npy")
-
-        diff_dataset, _ = get_doubledrawer_dataset(
-            prior_data_path=prior_data_path,
-            task_data_path=task_data_path,
-            sample_ratio =args.sample_ratio, 
-            task_weight=args.task_weight)
-        dyn_dataset, init_obss_dataset = get_doubledrawer_dataset(
-            prior_data_path=prior_data_path,
-            task_data_path=task_data_path)
+        diff_dataset, _, _ = get_pointmaze_dataset(
+            trajs,
+            sample_ratio =args.sample_ratio)
+        dyn_dataset, init_obss_dataset, max_offline_return = get_pointmaze_dataset(trajs)
     else:
         raise NotImplementedError
 
@@ -229,8 +182,8 @@ def train(args=get_args()):
     dynamics_model = TransformerDynamicsModel(
         obs_dim=obs_dim,
         act_dim=action_dim,
-        obs_min = -1,
-        obs_max = 1,
+        obs_min = -5.5,
+        obs_max = 5.5,
         act_min = -1,
         act_max = 1,
         r_min = 0,
@@ -317,7 +270,7 @@ def train(args=get_args()):
             print(f"Train diffusion behavior policy")
             diff_policy_trainer.train() # save checkpoint periodically
 
-    def get_rollout_trajs(logger: Logger, threshold = 0.9) -> Tuple[Dict[str, np.ndarray], float]:
+    def get_rollout_trajs(logger: Logger, threshold) -> Tuple[Dict[str, np.ndarray], float]:
         '''
         Rollout trajectories or load existing trajectories.
         If rollout, call `get_rollout_policy()` and `get_dynamics()` first to get rollout policy and dynamics
@@ -368,12 +321,7 @@ def train(args=get_args()):
 
                 # Only keep trajs with returns > threshold
                 returns = rollout_info['returns']
-                rewards_full = rollout_info['rewards_full']
-                min_last_rewards = np.min(rewards_full[:, -3:], axis = -1) # (B,), final steps must be large
-                max_last_rewards = np.max(rewards_full[:, -3:], axis = -1)
-                max_cond = np.logical_and(max_last_rewards > 0.9, max_last_rewards < 2)
-                min_cond = min_last_rewards > 0.7
-                valid_cond = np.logical_and(max_cond, min_cond)
+                valid_cond = returns > threshold
                 valid_trajs = np.arange(args.rollout_batch)[valid_cond] # np.array, indexs of all valid trajs
 
                 valid_data_idxs = [rollout_data['traj_idxs'][i] in valid_trajs for i in range(rollout_data['traj_idxs'].shape[0])]
@@ -412,7 +360,7 @@ def train(args=get_args()):
     print(f"Logging diffusion rollout to {rollout_save_dir}")
     rollout_logger = Logger(rollout_save_dir, {"consoleout_backup": "stdout"})
     rollout_logger.log_hyperparameters(vars(args))
-    rollout_dataset, max_offline_return = get_rollout_trajs(rollout_logger)
+    rollout_dataset, max_rollout_return = get_rollout_trajs(rollout_logger, threshold = max_offline_return)
 
     # train
     rcsl_policy = AutoregressivePolicy(
@@ -441,7 +389,7 @@ def train(args=get_args()):
         eval_env = env,
         offline_dataset = rollout_dataset,
         rollout_dataset = None,
-        goal = max_offline_return, # AutoregressivePolicy is not return-conditioned
+        goal = max_rollout_return, # AutoregressivePolicy is not return-conditioned
         logger = rcsl_logger,
         seed = args.seed,
         epoch = args.rcsl_epoch,
@@ -450,9 +398,11 @@ def train(args=get_args()):
         lr_scheduler = lr_scheduler,
         horizon = args.horizon,
         num_workers = args.num_workers,
-        eval_episodes = args.eval_episodes
+        eval_episodes = args.eval_episodes,
+        binary_return=False
     )
 
+    rcsl_logger.log(f"Desired return: {max_offline_return}")
     policy_trainer.train(holdout_ratio=args.holdout_ratio, last_eval=args.last_eval)
 
 

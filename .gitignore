@@ -19,3 +19,4 @@ scripts/
 test*.py
 dataset/
 *_debug.pth
+pointmaze_test/

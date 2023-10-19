@@ -35,7 +35,8 @@ class RcslPolicyTrainer:
         lr_scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
         horizon: Optional[int] = None,
         num_workers = 1,
-        has_terminal = False
+        has_terminal = False,
+        binary_return = True
     ) -> None:
         '''
         offline_ratio = 0: rollout only, 1: offline only
@@ -56,6 +57,7 @@ class RcslPolicyTrainer:
         self.lr_scheduler = lr_scheduler
         self.num_workers = num_workers
         self.env_seed = seed
+        self.binary_return = binary_return
 
         self.is_gymnasium_env = hasattr(self.eval_env, "get_true_observation")
         assert (not self.is_gymnasium_env) or (self.horizon is not None), "Horizon must be specified for Gymnasium env"
@@ -183,7 +185,7 @@ class RcslPolicyTrainer:
         num_episodes = 0
         episode_reward, episode_length = 0, 0
 
-        if not self.has_terminal: # pointmaze environment, don't use horizon
+        if not self.has_terminal: # don't use terminal signal, terminate when reach horizon
             while num_episodes < real_eval_episodes:
                 rtg = torch.tensor([[self.goal]]).type(torch.float32)
                 for timestep in range(self.horizon): # One epoch
@@ -199,7 +201,8 @@ class RcslPolicyTrainer:
                     episode_length += 1
 
                     obs = next_obs
-                episode_reward = 1 if episode_reward > 0 else 0 # Clip to 1
+                if self.binary_return:
+                    episode_reward = 1 if episode_reward > 0 else 0 # Clip to 1
                 eval_ep_info_buffer.append(
                     {"episode_reward": episode_reward, "episode_length": episode_length}
                 )
@@ -226,7 +229,8 @@ class RcslPolicyTrainer:
                 obs = next_obs
 
                 if terminal: # Episode finishes
-                    episode_reward = 1 if episode_reward > 0 else 0 # Clip to 1
+                    if self.binary_return:
+                        episode_reward = 1 if episode_reward > 0 else 0 # Clip to 1
                     eval_ep_info_buffer.append(
                         {"episode_reward": episode_reward, "episode_length": episode_length}
                     )
