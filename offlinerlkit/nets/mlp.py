@@ -13,7 +13,8 @@ class MLP(nn.Module):
         hidden_dims: Union[List[int], Tuple[int]],
         output_dim: Optional[int] = None,
         activation: nn.Module = nn.ReLU,
-        dropout_rate: Optional[float] = None
+        dropout_rate: Optional[float] = None,
+        init_last: bool = False
     ) -> None:
         super().__init__()
         hidden_dims = [input_dim] + list(hidden_dims)
@@ -25,7 +26,11 @@ class MLP(nn.Module):
 
         self.output_dim = hidden_dims[-1]
         if output_dim is not None:
-            model += [nn.Linear(hidden_dims[-1], output_dim)]
+            last_layer = nn.Linear(hidden_dims[-1], output_dim)
+            if init_last:
+                nn.init.xavier_uniform_(last_layer.weight, gain=1e-2)
+                nn.init.constant_(last_layer.bias, 0.0)
+            model += [last_layer]
             self.output_dim = output_dim
         self.model = nn.Sequential(*model)
 

@@ -138,7 +138,7 @@ class AutoregressivePolicy(nn.Module):
         self.rcsl_optim.step()
 
         result =  {
-            "holdout_loss": loss.item(),
+            "loss": loss.item(),
         }
         
         return result
@@ -155,7 +155,7 @@ class AutoregressivePolicy(nn.Module):
         with torch.no_grad():
             loss = self.fit(obss, rtgs, actions, weights)
         return {
-            "loss": loss.item()
+            "holdout_loss": loss.item()
         }
 
 

@@ -21,6 +21,7 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--algo-name", type=str, default="cql")
     parser.add_argument("--task", type=str, default="pickplace")
+    parser.add_argument("--last_eval", action="store_false")
     
     # env config (pickplace)
     parser.add_argument('--data_dir', type=str, required=True)
@@ -199,11 +200,12 @@ def train(args=get_args()):
         eval_episodes=args.eval_episodes,
         horizon = args.horizon,
         has_terminal=False,
-        binary_ret = True
+        binary_ret = True,
+        last_eval_episodes=100
     )
 
     # train
-    policy_trainer.train(last_eval=True)
+    policy_trainer.train(last_eval=args.last_eval)
 
 
 if __name__ == "__main__":

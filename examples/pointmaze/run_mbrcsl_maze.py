@@ -11,12 +11,16 @@ from typing import Dict, Tuple
 from collections import defaultdict
 import datetime
 
-from offlinerlkit.modules import TransformerDynamicsModel
-from offlinerlkit.dynamics import TransformerDynamics
+from offlinerlkit.modules import EnsembleDynamicsModel, RcslModule
+from offlinerlkit.dynamics import EnsembleDynamics
+from offlinerlkit.utils.scaler import StandardScaler
+from offlinerlkit.utils.termination_fns import get_termination_fn
+from offlinerlkit.nets import MLP
 from offlinerlkit.utils.logger import Logger, make_log_dirs
 from offlinerlkit.policy_trainer import RcslPolicyTrainer, DiffusionPolicyTrainer
 from offlinerlkit.utils.none_or_str import none_or_str
-from offlinerlkit.policy import SimpleDiffusionPolicy, AutoregressivePolicy
+from offlinerlkit.utils.set_up_seed import set_up_seed
+from offlinerlkit.policy import SimpleDiffusionPolicy, RcslPolicy
 from envs.pointmaze.create_maze_dataset import create_env_dataset
 from envs.pointmaze.utils.trajectory import get_pointmaze_dataset
 from envs.pointmaze.utils.maze_utils import PointMazeObsWrapper
@@ -34,51 +38,52 @@ def get_args():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--num_workers", type=int, default=1, help="Dataloader workers, align with cpu number")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--last_eval", action="store_false")
+    parser.add_argument("--last_eval", action="store_true")
 
     # env config (general)
     parser.add_argument('--data_dir', type=str, required=True)
-    parser.add_argument('--horizon', type=int, default=40, help="max path length for pickplace")
+    parser.add_argument('--horizon', type=int, default=200, help="max path length for pickplace")
 
     # env config (pointmaze)
     parser.add_argument('--maze_config_file', type=str, default='envs/pointmaze/config/maze_default.json')
     parser.add_argument('--data_file', type=str, default='pointmaze.dat')
 
-    # transformer_autoregressive dynamics
-    parser.add_argument("--n_layer", type=int, default=4)
-    parser.add_argument("--n_head", type=int, default=4)
-    parser.add_argument("--n_embd", type=int, default=32)
+    # ensemble dynamics
+    parser.add_argument("--n-ensemble", type=int, default=7)
+    parser.add_argument("--n-elites", type=int, default=5)
+    parser.add_argument("--dynamics_hidden_dims", type=int, nargs='*', default=[200, 200, 200, 200])
+    parser.add_argument("--dynamics_weight_decay", type=float, nargs='*', default=[2.5e-5, 5e-5, 7.5e-5, 7.5e-5, 1e-4])
     parser.add_argument("--dynamics_lr", type=float, default=1e-3)
-    parser.add_argument("--dynamics_epoch", type=int, default=80)
     parser.add_argument("--load_dynamics_path", type=none_or_str, default=None)
 
     # Behavior policy (diffusion)
-    parser.add_argument("--behavior_epoch", type=int, default=30)
-    parser.add_argument("--num_diffusion_iters", type=int, default=5, help="Number of diffusion steps")
+    parser.add_argument("--behavior_epoch", type=int, default=50)
+    parser.add_argument("--num_diffusion_iters", type=int, default=10, help="Number of diffusion steps")
     parser.add_argument('--behavior_batch', type=int, default=256)
     parser.add_argument('--load_diffusion_path', type=none_or_str, default=None)
-    parser.add_argument('--task_weight', type=float, default=1.4, help="Weight on task data when training diffusion policy")
-    parser.add_argument('--sample_ratio', type=float, default=0.8, help="Use (sample_ratio * num_total_data) data to train diffusion policy")
+    parser.add_argument('--sample_ratio', type=float, default=1., help="Use (sample_ratio * num_total_data) data to train diffusion policy")
     
     # Rollout 
     parser.add_argument('--rollout_ckpt_path', type=none_or_str, default=None, help="file dir, used to load/store rollout trajs" )
     parser.add_argument('--rollout_epoch', type=int, default=1000, help="Max number of epochs to rollout the policy")
-    parser.add_argument('--num_need_traj', type=int, default=5000, help="Needed valid trajs in rollout")
+    parser.add_argument('--num_need_traj', type=int, default=100, help="Needed valid trajs in rollout")
     parser.add_argument("--rollout-batch", type=int, default=200, help="Number of trajs to be sampled at one time")
 
     # RCSL policy (mlp)
-    parser.add_argument("--rcsl_hidden_dims", type=int, nargs='*', default=[200, 200, 200, 200])
-    parser.add_argument("--rcsl_lr", type=float, default=1e-3)
+    parser.add_argument("--rcsl_hidden_dims", type=int, nargs='*', default=[1024,1024])
+    parser.add_argument("--rcsl_lr", type=float, default=5e-5)
     parser.add_argument("--rcsl_batch", type=int, default=256)
     parser.add_argument("--rcsl_epoch", type=int, default=100)
-    parser.add_argument("--eval_episodes", type=int, default=100)
-    parser.add_argument("--holdout_ratio", type=float, default=0.2)
+    parser.add_argument("--rcsl_weight_decay", type=float, default=0.1)
+    parser.add_argument("--eval_episodes", type=int, default=10)
+    parser.add_argument("--holdout_ratio", type=float, default=0.1)
+    parser.add_argument("--find_best_start", type=int, default=50)
 
     return parser.parse_args()
 
 def rollout_simple(
     init_obss: np.ndarray,
-    dynamics: TransformerDynamicsModel,
+    dynamics: EnsembleDynamicsModel,
     rollout_policy: SimpleDiffusionPolicy,
     rollout_length: int
 ) -> Tuple[Dict[str, np.ndarray], Dict]:
@@ -109,7 +114,6 @@ def rollout_simple(
     for t in range(rollout_length):
         actions = rollout_policy.select_action(observations, goal)
         next_observations, rewards, terminals, info = dynamics.step(observations, actions)
-        # rewards = rewards.clip(0,2) # set rewards in [0,2]
         rollout_transitions["observations"].append(observations)
         rollout_transitions["next_observations"].append(next_observations)
         rollout_transitions["actions"].append(actions)
@@ -140,12 +144,7 @@ def rollout_simple(
         {"num_transitions": num_transitions, "reward_mean": rewards_arr.mean(), "returns": returns, "max_rewards": max_rewards, "rewards_full": rewards_full}
 
 def train(args=get_args()):
-    # seed
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
-    torch.backends.cudnn.deterministic = True
+    set_up_seed(args.seed)
 
     # create env and dataset
     if args.task == 'pointmaze':
@@ -179,30 +178,27 @@ def train(args=get_args()):
     logger = Logger(log_dirs, output_config)
     logger.log_hyperparameters(vars(args))
 
-    dynamics_model = TransformerDynamicsModel(
+    dynamics_model = EnsembleDynamicsModel(
         obs_dim=obs_dim,
-        act_dim=action_dim,
-        obs_min = -5.5,
-        obs_max = 5.5,
-        act_min = -1,
-        act_max = 1,
-        r_min = 0,
-        r_max = 1,
-        ckpt_dir = logger.checkpoint_dir,
-        device = args.device,
-        n_layer = args.n_layer,
-        n_head = args.n_head,
-        n_embd = args.n_embd
+        action_dim=action_dim,
+        hidden_dims=args.dynamics_hidden_dims,
+        num_ensemble=args.n_ensemble,
+        num_elites=args.n_elites,
+        weight_decays=args.dynamics_weight_decay,
+        device=args.device
     )
-    
-    dynamics_optim = dynamics_model.configure_optimizer(
-        lr = args.dynamics_lr,
-        weight_decay= 0. ,
-        betas = (0.9, 0.999)
+    dynamics_optim = torch.optim.Adam(
+        dynamics_model.parameters(),
+        lr=args.dynamics_lr
     )
-    dynamics = TransformerDynamics(
+
+    scaler = StandardScaler()
+    termination_fn = get_termination_fn(task=args.task)
+    dynamics = EnsembleDynamics(
         dynamics_model,
         dynamics_optim,
+        scaler,
+        termination_fn
     )
 
     # create rollout policy
@@ -252,7 +248,7 @@ def train(args=get_args()):
             dynamics.load(args.load_dynamics_path)
         else: 
             print(f"Train dynamics")
-            dynamics.train(dyn_dataset, logger, max_epochs=args.dynamics_epoch)
+            dynamics.train(dyn_dataset, logger)
         
     def get_rollout_policy():
         '''
@@ -363,14 +359,27 @@ def train(args=get_args()):
     rollout_dataset, max_rollout_return = get_rollout_trajs(rollout_logger, threshold = max_offline_return)
 
     # train
-    rcsl_policy = AutoregressivePolicy(
-        obs_dim=obs_dim,
-        act_dim = action_dim,
-        hidden_dims=args.rcsl_hidden_dims,
-        lr = args.rcsl_lr,
+    set_up_seed(args.seed)
+    rcsl_backbone = MLP(
+        input_dim = obs_dim + 1,
+        hidden_dims = args.rcsl_hidden_dims,
+        output_dim = action_dim,
+        init_last = True
+    )
+
+    rcsl_module = RcslModule(
+        rcsl_backbone,
         device = args.device
     )
-    lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(rcsl_policy.rcsl_optim, args.rcsl_epoch)
+    rcsl_optim = torch.optim.Adam(rcsl_module.parameters(), lr=args.rcsl_lr, weight_decay=args.rcsl_weight_decay)
+
+    rcsl_policy = RcslPolicy(
+        rcsl_module,
+        rcsl_optim,
+        device = args.device
+    )
+    # lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(rcsl_optim, args.rcsl_epoch)
+    lr_scheduler=None
     
     task_name = args.task
     rcsl_log_dirs = make_log_dirs(task_name, args.algo_name, exp_name, vars(args), part='rcsl')
@@ -402,8 +411,9 @@ def train(args=get_args()):
         binary_return=False
     )
 
-    rcsl_logger.log(f"Desired return: {max_offline_return}")
-    policy_trainer.train(holdout_ratio=args.holdout_ratio, last_eval=args.last_eval)
+    rcsl_logger.log(f"Desired return: {max_rollout_return}")
+
+    policy_trainer.train(holdout_ratio=args.holdout_ratio, last_eval=args.last_eval, find_best_start=args.find_best_start)
 
 
 if __name__ == "__main__":

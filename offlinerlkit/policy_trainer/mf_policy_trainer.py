@@ -28,7 +28,8 @@ class MFPolicyTrainer:
         lr_scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
         horizon: Optional[int] = None,
         has_terminal = False,
-        binary_ret = False
+        binary_ret = False,
+        last_eval_episodes: Optional[int] = None
     ) -> None:
         '''
         binary_ret: If True, only output 0/1 for return
@@ -49,6 +50,11 @@ class MFPolicyTrainer:
         self.has_terminal = has_terminal
         self.horizon = horizon
         self.binary_ret = binary_ret
+
+        if last_eval_episodes is None:
+            self._last_eval_episodes = eval_episodes
+        else:
+            self._last_eval_episodes = last_eval_episodes
 
     def train(self, last_eval = False) -> Dict[str, float]:
         start_time = time.time()
@@ -78,7 +84,10 @@ class MFPolicyTrainer:
             if last_eval and e < self._epoch: # When last_eval is True, only evaluate on last epoch
                 pass
             else:
-                eval_info = self._evaluate()
+                if e < self._epoch:
+                    eval_info = self._evaluate()
+                else:
+                    eval_info = self._evaluate(self._last_eval_episodes)
                 ep_reward_mean, ep_reward_std = np.mean(eval_info["eval/episode_reward"]), np.std(eval_info["eval/episode_reward"])
                 ep_length_mean, ep_length_std = np.mean(eval_info["eval/episode_length"]), np.std(eval_info["eval/episode_length"])
                 if hasattr(self.eval_env, "get_normalized_score"):
@@ -104,15 +113,20 @@ class MFPolicyTrainer:
 
         return {"last_10_performance": np.mean(last_10_performance)}
 
-    def _evaluate(self) -> Dict[str, List[float]]:
+    def _evaluate(self, episodes: Optional[int] = None) -> Dict[str, List[float]]:
         self.policy.eval()
         obs = self.eval_env.reset()
         eval_ep_info_buffer = []
         num_episodes = 0
         episode_reward, episode_length = 0, 0
 
+        if episodes is not None:
+            total_episodes = episodes
+        else:
+            total_episodes = self._eval_episodes
+
         if not self.has_terminal: # Finite horizon, terminal is unimportant
-            while num_episodes < self._eval_episodes:
+            while num_episodes < total_episodes:
                 for timestep in range(self.horizon): # One epoch
                     # print(f"Timestep {timestep}, obs {obs}")
                     action = self.policy.select_action(obs.reshape(1, -1), deterministic=True)
@@ -140,7 +154,7 @@ class MFPolicyTrainer:
                 else:
                     obs = self.eval_env.reset()
         else:
-            while num_episodes < self._eval_episodes:
+            while num_episodes < total_episodes:
                 action = self.policy.select_action(obs.reshape(1, -1), deterministic=True)
                 if hasattr(self.eval_env, "get_true_observation"): # gymnasium env 
                     next_obs, reward, terminal, _, _ = self.eval_env.step(action.flatten())

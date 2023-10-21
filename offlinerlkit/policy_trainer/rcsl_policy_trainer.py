@@ -10,6 +10,7 @@ from typing import Optional, Dict, List, Tuple, Union
 from tqdm import tqdm
 from collections import deque
 from torch.utils.data import DataLoader
+from copy import deepcopy
 
 from offlinerlkit.buffer import ReplayBuffer
 from offlinerlkit.utils.logger import Logger
@@ -63,9 +64,10 @@ class RcslPolicyTrainer:
         assert (not self.is_gymnasium_env) or (self.horizon is not None), "Horizon must be specified for Gymnasium env"
         self.has_terminal = has_terminal
 
-    def train(self, holdout_ratio: float = 0.1, last_eval = False) -> Dict[str, float]:
+    def train(self, holdout_ratio: float = 0.1, last_eval = False, find_best_start: Optional[int] = None) -> Dict[str, float]:
         '''
         last_eval: If True, only evaluates at the last epoch
+        find_best_start: If >=0, begin to find the best epoch by holdout loss
         '''
         start_time = time.time()
 
@@ -74,10 +76,15 @@ class RcslPolicyTrainer:
 
         dataset = DictDataset(self.offline_dataset)
 
-        holdout_size = int(len(dataset) * holdout_ratio)
-        train_size = len(dataset) - holdout_size
-        train_dataset, holdout_dataset = torch.utils.data.random_split(dataset, [train_size, holdout_size], 
-                                                                       generator=torch.Generator().manual_seed(self.env_seed))
+        if holdout_ratio == 0.:
+            has_holdout = False
+            train_dataset = dataset
+        else:
+            has_holdout = True
+            holdout_size = int(len(dataset) * holdout_ratio)
+            train_size = len(dataset) - holdout_size
+            train_dataset, holdout_dataset = torch.utils.data.random_split(dataset, [train_size, holdout_size], 
+                                                                        generator=torch.Generator().manual_seed(self.env_seed))
         data_loader = DataLoader(
             train_dataset,
             batch_size = self._batch_size,
@@ -87,11 +94,16 @@ class RcslPolicyTrainer:
         )
         best_ep_reward_mean = 1e10
         best_policy_dict = self.policy.state_dict()
+        best_holdout_loss = 1e10
+        old_train_loss = 1e10
+        epochs_since_upd = 0
+        stop_by_holdout = (find_best_start is not None)
         for e in range(1, self._epoch + 1):
 
             self.policy.train()
 
             pbar = tqdm(enumerate(data_loader), desc=f"Epoch #{e}/{self._epoch}")
+            # losses = []
             for it, batch in pbar:
                 '''
                 batch: dict with keys
@@ -104,6 +116,7 @@ class RcslPolicyTrainer:
 
                 '''
                 loss_dict = self.policy.learn(batch)
+                # losses.append(loss_dict['loss'])
                 pbar.set_postfix(**loss_dict)
 
                 for k, v in loss_dict.items():
@@ -115,7 +128,22 @@ class RcslPolicyTrainer:
                 self.lr_scheduler.step()
 
             # Test validation loss
-            self.validate(holdout_dataset)
+            if has_holdout:
+                holdout_loss = self.validate(holdout_dataset)
+                if stop_by_holdout and e >= find_best_start: # test holdout improvement
+                    # loss = sum(losses) / len(losses)
+                    if (best_holdout_loss - holdout_loss) / best_holdout_loss > 0.01:
+                        best_holdout_loss = holdout_loss
+                        best_policy_dict = deepcopy(self.policy.state_dict())
+                        # old_train_loss = loss
+                        epochs_since_upd = 0
+                    # elif best_holdout_loss > holdout_loss and (old_train_loss - loss) / old_train_loss > 0.005:
+                    #     best_holdout_loss = holdout_loss
+                    #     best_policy_dict = deepcopy(self.policy.state_dict())
+                    #     old_train_loss = loss
+                    #     epochs_since_upd = 0
+                    else:
+                        epochs_since_upd += 1
 
             if last_eval and e < self._epoch: # When last_eval is True, only evaluate on last epoch
                 pass
@@ -143,20 +171,23 @@ class RcslPolicyTrainer:
                 self.logger.logkv("eval/episode_length_std", ep_length_std)
 
                 # save checkpoint
-                if ep_reward_mean >= best_ep_reward_mean:
-                    best_ep_reward_mean = ep_reward_mean
-                    best_policy_dict = self.policy.state_dict()
-                    torch.save(self.policy.state_dict(), os.path.join(self.logger.checkpoint_dir, "policy_best.pth"))
+                # if ep_reward_mean >= best_ep_reward_mean:
+                #     best_ep_reward_mean = ep_reward_mean
+                #     best_policy_dict = self.policy.state_dict()
+                #     torch.save(self.policy.state_dict(), os.path.join(self.logger.checkpoint_dir, "policy_best.pth"))
 
             self.logger.set_timestep(num_timesteps)
             self.logger.dumpkvs(exclude=["dynamics_training_progress"])
-        
 
+            if stop_by_holdout and epochs_since_upd >= 5: # Stop, evaluate for the last time
+                self.policy.load_state_dict(best_policy_dict)
+                eval_info = self._evaluate()
+                ep_reward_mean, ep_reward_std = np.mean(eval_info["eval/episode_reward"]), np.std(eval_info["eval/episode_reward"])
+                self.logger.log(f"Final evaluation: Mean {ep_reward_mean}, std {ep_reward_std}\n")
+                break
+        
         self.logger.log("total time: {:.2f}s".format(time.time() - start_time))
         torch.save(self.policy.state_dict(), os.path.join(self.logger.model_dir, "policy_final.pth"))
-        eval_info = self._evaluate()
-        ep_reward_mean, ep_reward_std = np.mean(eval_info["eval/episode_reward"]), np.std(eval_info["eval/episode_reward"])
-        print(f"Mean: {ep_reward_mean}, std: {ep_reward_std}")
         self.logger.close()
     
         return {"last_10_performance": np.mean(last_10_performance)}
@@ -248,7 +279,7 @@ class RcslPolicyTrainer:
         }
     
     @ torch.no_grad()
-    def validate(self, holdout_dataset: torch.utils.data.Dataset) -> List[float]:
+    def validate(self, holdout_dataset: torch.utils.data.Dataset) -> Optional[float]:
         data_loader = DataLoader(
             holdout_dataset,
             batch_size = self._batch_size,
@@ -259,6 +290,7 @@ class RcslPolicyTrainer:
         self.policy.eval()
 
         pbar = tqdm(enumerate(data_loader), total=len(data_loader))
+        losses = []
         for it, batch in pbar:
             '''
             batch: dict with keys
@@ -273,3 +305,12 @@ class RcslPolicyTrainer:
 
             for k, v in loss_dict.items():
                 self.logger.logkv_mean(k, v)
+
+            if "holdout_loss" in loss_dict:
+                loss = loss_dict["holdout_loss"]
+                losses.append(loss)
+
+        if len(losses) > 0:
+            return(sum(losses) / len(losses))
+        else:
+            return None

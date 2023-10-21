@@ -84,6 +84,20 @@ def train(args=get_args()):
             prior_data_path=prior_data_path,
             task_data_path=task_data_path, 
             task_weight=args.task_weight)
+    elif args.task == 'doubledrawercloseopen':
+        env = roboverse.make('Widow250DoubleDrawerCloseOpenGraspNeutral-v0')
+        env = DoubleDrawerObsWrapper(env)
+        obs_space = env.observation_space
+        args.obs_shape = obs_space.shape
+        args.action_shape = env.action_space.shape
+
+        prior_data_path = os.path.join(args.data_dir, "blocked_drawer_1_prior.npy")
+        task_data_path = os.path.join(args.data_dir, "drawer_task.npy")
+
+        dataset, _ = get_doubledrawer_dataset(
+            prior_data_path=prior_data_path,
+            task_data_path=task_data_path,
+            task_weight=args.task_weight)
     else:
         raise NotImplementedError
     diffusion_policy = SimpleDiffusionPolicy(

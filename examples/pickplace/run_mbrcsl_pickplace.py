@@ -26,7 +26,7 @@ from envs.pointmaze.utils.maze_utils import PointMazeObsWrapper
 Recommended hyperparameters:
 pickplace, horizon=40, behavior_epoch=30
 doubledraweropen, horizon=50, behavior_epoch=40
-doubledrawercloseopen
+doubledrawercloseopen, horizon=80
 doubledrawerpickplaceopen
 '''
 

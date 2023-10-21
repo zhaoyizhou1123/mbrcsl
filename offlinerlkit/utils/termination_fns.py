@@ -154,11 +154,5 @@ def get_termination_fn(task):
         return termination_fn_pen
     elif 'door' in task:
         return termination_fn_door
-    elif 'maze' in task:
-        return termination_fn_default
-    elif 'pickplace' in task:
-        return termination_fn_default
-    elif 'pickplace_easy' in task:
-        return termination_fn_default
     else:
-        raise NotImplementedError
+        return termination_fn_default

@@ -7,7 +7,6 @@ logs_scp/
 **/build
 **/dist
 **/*.egg-info
-**/*.txt
 **/.vscode
 **/_log
 *.out
