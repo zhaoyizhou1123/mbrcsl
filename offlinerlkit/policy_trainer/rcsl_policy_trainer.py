@@ -92,10 +92,8 @@ class RcslPolicyTrainer:
             pin_memory = True,
             num_workers = self.num_workers
         )
-        best_ep_reward_mean = 1e10
         best_policy_dict = self.policy.state_dict()
         best_holdout_loss = 1e10
-        old_train_loss = 1e10
         epochs_since_upd = 0
         stop_by_holdout = (find_best_start is not None)
         for e in range(1, self._epoch + 1):
@@ -103,7 +101,6 @@ class RcslPolicyTrainer:
             self.policy.train()
 
             pbar = tqdm(enumerate(data_loader), desc=f"Epoch #{e}/{self._epoch}")
-            # losses = []
             for it, batch in pbar:
                 '''
                 batch: dict with keys
@@ -116,7 +113,6 @@ class RcslPolicyTrainer:
 
                 '''
                 loss_dict = self.policy.learn(batch)
-                # losses.append(loss_dict['loss'])
                 pbar.set_postfix(**loss_dict)
 
                 for k, v in loss_dict.items():
@@ -131,17 +127,10 @@ class RcslPolicyTrainer:
             if has_holdout:
                 holdout_loss = self.validate(holdout_dataset)
                 if stop_by_holdout and e >= find_best_start: # test holdout improvement
-                    # loss = sum(losses) / len(losses)
                     if (best_holdout_loss - holdout_loss) / best_holdout_loss > 0.01:
                         best_holdout_loss = holdout_loss
                         best_policy_dict = deepcopy(self.policy.state_dict())
-                        # old_train_loss = loss
                         epochs_since_upd = 0
-                    # elif best_holdout_loss > holdout_loss and (old_train_loss - loss) / old_train_loss > 0.005:
-                    #     best_holdout_loss = holdout_loss
-                    #     best_policy_dict = deepcopy(self.policy.state_dict())
-                    #     old_train_loss = loss
-                    #     epochs_since_upd = 0
                     else:
                         epochs_since_upd += 1
 
@@ -169,12 +158,6 @@ class RcslPolicyTrainer:
                     self.logger.logkv("eval/normalized_episode_reward_min", norm_ep_rew_min)
                 self.logger.logkv("eval/episode_length", ep_length_mean)
                 self.logger.logkv("eval/episode_length_std", ep_length_std)
-
-                # save checkpoint
-                # if ep_reward_mean >= best_ep_reward_mean:
-                #     best_ep_reward_mean = ep_reward_mean
-                #     best_policy_dict = self.policy.state_dict()
-                #     torch.save(self.policy.state_dict(), os.path.join(self.logger.checkpoint_dir, "policy_best.pth"))
 
             self.logger.set_timestep(num_timesteps)
             self.logger.dumpkvs(exclude=["dynamics_training_progress"])

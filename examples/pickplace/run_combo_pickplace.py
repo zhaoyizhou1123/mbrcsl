@@ -13,19 +13,19 @@ from offlinerlkit.nets import MLP
 from offlinerlkit.modules import ActorProb, Critic, TanhDiagGaussian, EnsembleDynamicsModel
 from offlinerlkit.dynamics import EnsembleDynamics
 from offlinerlkit.utils.scaler import StandardScaler
-from offlinerlkit.utils.termination_fns import get_termination_fn
+from offlinerlkit.utils.termination_fns import termination_fn_default
 from offlinerlkit.buffer import ReplayBuffer
 from offlinerlkit.utils.logger import Logger, make_log_dirs
 from offlinerlkit.policy_trainer import MBPolicyTrainer
 from offlinerlkit.policy import COMBOPolicy
-from offlinerlkit.utils.pickplace_utils import SimpleObsWrapper, get_pickplace_dataset
+from offlinerlkit.utils.roboverse_utils import PickPlaceObsWrapper, DoubleDrawerObsWrapper, get_pickplace_dataset, get_doubledrawer_dataset
 from offlinerlkit.utils.none_or_str import none_or_str
-
 
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--algo-name", type=str, default="combo")
     parser.add_argument("--task", type=str, default="pickplace", help="pickplace") # Self-constructed environment
+    parser.add_argument("--last_eval", action="store_false")
 
     # env config (pickplace)
     parser.add_argument('--data_dir', type=str, required=True)
@@ -73,7 +73,6 @@ def get_args():
 
     return parser.parse_args()
 
-
 def train(args=get_args()):
     # seed
     random.seed(args.seed)
@@ -85,13 +84,63 @@ def train(args=get_args()):
     # create env and dataset
     if args.task == 'pickplace':
         env = roboverse.make('Widow250PickTray-v0')
-        env = SimpleObsWrapper(env)
+        env = PickPlaceObsWrapper(env)
         obs_space = env.observation_space
         args.obs_shape = obs_space.shape
         args.obs_dim = np.prod(args.obs_shape)
         args.action_shape = env.action_space.shape
         args.action_dim = np.prod(args.action_shape)
-        dataset, init_obss_dataset = get_pickplace_dataset(args.data_dir)
+
+        prior_data_path = os.path.join(args.data_dir, "pickplace_prior.npy")
+        task_data_path = os.path.join(args.data_dir, "pickplace_task.npy")
+        dataset, init_obss_dataset = get_pickplace_dataset(
+            prior_data_path=prior_data_path,
+            task_data_path=task_data_path)
+    elif args.task == 'doubledraweropen':
+        env = roboverse.make('Widow250DoubleDrawerOpenGraspNeutral-v0')
+        env = DoubleDrawerObsWrapper(env)
+        obs_space = env.observation_space
+        args.obs_shape = obs_space.shape
+        args.obs_dim = np.prod(args.obs_shape)
+        args.action_shape = env.action_space.shape
+        args.action_dim = np.prod(args.action_shape)
+
+        prior_data_path = os.path.join(args.data_dir, "closed_drawer_prior.npy")
+        task_data_path = os.path.join(args.data_dir, "drawer_task.npy")
+
+        dataset, init_obss_dataset = get_doubledrawer_dataset(
+            prior_data_path=prior_data_path,
+            task_data_path=task_data_path)
+    elif args.task == 'doubledrawercloseopen':
+        env = roboverse.make('Widow250DoubleDrawerCloseOpenGraspNeutral-v0')
+        env = DoubleDrawerObsWrapper(env)
+        obs_space = env.observation_space
+        args.obs_shape = obs_space.shape
+        args.obs_dim = np.prod(args.obs_shape)
+        args.action_shape = env.action_space.shape
+        args.action_dim = np.prod(args.action_shape)
+
+        prior_data_path = os.path.join(args.data_dir, "blocked_drawer_1_prior.npy")
+        task_data_path = os.path.join(args.data_dir, "drawer_task.npy")
+
+        dataset, init_obss_dataset = get_doubledrawer_dataset(
+            prior_data_path=prior_data_path,
+            task_data_path=task_data_path)
+    elif args.task == 'doubledrawerpickplaceopen':
+        env = roboverse.make('Widow250DoubleDrawerPickPlaceOpenGraspNeutral-v0')
+        env = DoubleDrawerObsWrapper(env)
+        obs_space = env.observation_space
+        args.obs_shape = obs_space.shape
+        args.obs_dim = np.prod(args.obs_shape)
+        args.action_shape = env.action_space.shape
+        args.action_dim = np.prod(args.action_shape)
+
+        prior_data_path = os.path.join(args.data_dir, "blocked_drawer_2_prior.npy")
+        task_data_path = os.path.join(args.data_dir, "drawer_task.npy")
+
+        dataset, init_obss_dataset = get_doubledrawer_dataset(
+            prior_data_path=prior_data_path,
+            task_data_path=task_data_path)
     else:
         raise NotImplementedError
     env.reset(seed=args.seed)
@@ -128,7 +177,6 @@ def train(args=get_args()):
     # create dynamics
     load_dynamics_model = True if args.load_dynamics_path else False
 
-    # print(f"dynamics_hidden_dims = {args.dynamics_hidden_dims}")
     dynamics_model = EnsembleDynamicsModel(
         obs_dim=np.prod(args.obs_shape),
         action_dim=args.action_dim,
@@ -143,7 +191,7 @@ def train(args=get_args()):
         lr=args.dynamics_lr
     )
     scaler = StandardScaler()
-    termination_fn = get_termination_fn(task=args.task)
+    termination_fn = termination_fn_default
     dynamics = EnsembleDynamics(
         dynamics_model,
         dynamics_optim,
@@ -237,7 +285,7 @@ def train(args=get_args()):
         print(f"Train dynamics")
         dynamics.train(real_buffer.sample_all(), logger, max_epochs_since_update=5)
     
-    policy_trainer.train(last_eval=True)
+    policy_trainer.train(last_eval=args.last_eval)
 
 
 if __name__ == "__main__":

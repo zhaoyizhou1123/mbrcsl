@@ -19,6 +19,7 @@ from offlinerlkit.policy.model_based.combo import COMBOPolicy
 from offlinerlkit.policy.diffusion.simple_diffusion import SimpleDiffusionPolicy
 from offlinerlkit.policy.rcsl.rcsl_autoregressive import AutoregressivePolicy
 from offlinerlkit.policy.rcsl.rcsl_mlp import RcslPolicy
+from offlinerlkit.policy.decision_transformer.decision_transformer import DecisionTransformer
 
 __all__ = [
     "BasePolicy",
@@ -35,5 +36,6 @@ __all__ = [
     "COMBOPolicy",
     "SimpleDiffusionPolicy",
     "RcslPolicy",
-    "AutoregressivePolicy"
+    "AutoregressivePolicy",
+    "DecisionTransformer"
 ]

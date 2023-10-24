@@ -216,6 +216,124 @@ def get_doubledrawer_dataset(
     init_obss = np.asarray(init_obss)
     return dict_data, init_obss
 
+def get_pickplace_dataset_dt(
+        prior_data_path: str, 
+        task_data_path: str,
+        prior_weight: float =1., 
+        task_weight: float = 1., 
+        set_type: str = 'full', 
+        sample_ratio: float = 1.) -> Tuple[Dict, np.ndarray]:
+    '''
+    Concatenate prior_data and task_data
+    prior_weight and task_weight: weight of data point
+
+    Args:
+        set_type: 'prior', 'task', 'full'
+        sample_ratio: Ratio of trajectories sampled. Sometimes we want to train on a smaller dataset.
+
+    Return:
+        dataset: list trajs: namedtuple with keys "observations", "actions", "rewards", "returns", "timesteps" 
+        init_obss: np.ndarray (num_traj, obs_dim)
+    '''
+    SimpleTrajectory = namedtuple(
+    "SimpleTrajectory", ["observations", "actions", "rewards", "returns", "timesteps"])
+    with open(prior_data_path, "rb") as fp:
+        prior_data = np.load(fp, allow_pickle=True)
+    with open(task_data_path, "rb") as ft:
+        task_data = np.load(ft, allow_pickle=True)
+    set_weight(prior_data, prior_weight)
+    set_weight(task_data, task_weight)
+
+    # Sample trajectories
+    num_trajs_prior = int(len(prior_data) * sample_ratio)
+    idxs_prior = np.random.choice(len(prior_data), size=(num_trajs_prior), replace = False)
+    prior_data = prior_data[idxs_prior]
+
+    num_trajs_task = int(len(task_data) * sample_ratio)
+    idxs_task = np.random.choice(len(task_data), size=(num_trajs_task), replace = False)
+    task_data = task_data[idxs_task]
+
+    if set_type == 'full':
+        full_data = np.concatenate([prior_data, task_data], axis=0) # list of dict
+    elif set_type == 'prior':
+        full_data = prior_data
+    elif set_type =='task':
+        full_data = task_data
+
+    trajs = []
+    for traj in full_data:
+        last_reward = traj['rewards'][-1]
+        rewards = traj['rewards']
+        simple_traj = SimpleTrajectory(
+            observations= [get_pickplace_obs(obs) for obs in traj['observations']],
+            actions = traj['actions'],
+            rewards = rewards,
+            returns = [last_reward for _ in range(len(rewards))],
+            timesteps= list(range(len(rewards)))
+        )
+        trajs.append(simple_traj)
+    return trajs
+
+def get_doubledrawer_dataset_dt(
+        prior_data_path: str, 
+        task_data_path: str,
+        prior_weight: float =1., 
+        task_weight: float = 1., 
+        set_type: str = 'full', 
+        sample_ratio: float = 1.) -> Tuple[Dict, np.ndarray]:
+    '''
+    Concatenate prior_data and task_data
+    prior_weight and task_weight: weight of data point
+
+    Args:
+        set_type: 'prior', 'task', 'full'
+        sample_ratio: Ratio of trajectories sampled. Sometimes we want to train on a smaller dataset.
+
+    Return:
+        dataset: list trajs: namedtuple with keys "observations", "actions", "rewards", "returns", "timesteps" 
+        init_obss: np.ndarray (num_traj, obs_dim)
+    '''
+    SimpleTrajectory = namedtuple(
+    "SimpleTrajectory", ["observations", "actions", "rewards", "returns", "timesteps"])
+    with open(prior_data_path, "rb") as fp:
+        prior_data = np.load(fp, allow_pickle=True)
+    with open(task_data_path, "rb") as ft:
+        task_data = np.load(ft, allow_pickle=True)
+    set_weight(prior_data, prior_weight)
+    set_weight(task_data, task_weight)
+
+    # Sample trajectories
+    num_trajs_prior = int(len(prior_data) * sample_ratio)
+    idxs_prior = np.random.choice(len(prior_data), size=(num_trajs_prior), replace = False)
+    prior_data = prior_data[idxs_prior]
+
+    num_trajs_task = int(len(task_data) * sample_ratio)
+    idxs_task = np.random.choice(len(task_data), size=(num_trajs_task), replace = False)
+    task_data = task_data[idxs_task]
+
+    if set_type == 'full':
+        full_data = np.concatenate([prior_data, task_data], axis=0) # list of dict
+    elif set_type == 'prior':
+        full_data = prior_data
+    elif set_type =='task':
+        full_data = task_data
+
+    trajs = []
+    for traj in full_data:
+        last_reward = traj['rewards'][-1]
+        rewards = traj['rewards']
+        info_list = traj['env_infos']
+        obs_list = traj['observations']
+        simple_traj = SimpleTrajectory(
+            observations= [get_doubledrawer_obs(obs,info) for obs,info in zip(obs_list, [info_list[0]] + info_list[:-1])],
+            actions = traj['actions'],
+            rewards = rewards,
+            returns = [last_reward for _ in range(len(rewards))],
+            timesteps= list(range(len(rewards)))
+        )
+        trajs.append(simple_traj)
+    return trajs
+
 def set_weight(dataset: np.ndarray, weight: float):
     for traj in list(dataset):
         traj_len = len(traj['rewards'])

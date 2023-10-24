@@ -18,16 +18,13 @@ from offlinerlkit.utils.logger import Logger, make_log_dirs
 from offlinerlkit.policy_trainer import RcslPolicyTrainer, DiffusionPolicyTrainer
 from offlinerlkit.utils.none_or_str import none_or_str
 from offlinerlkit.policy import SimpleDiffusionPolicy, AutoregressivePolicy
-from envs.pointmaze.create_maze_dataset import create_env_dataset
-from envs.pointmaze.utils.trajectory import get_pointmaze_dataset
-from envs.pointmaze.utils.maze_utils import PointMazeObsWrapper
 
 '''
 Recommended hyperparameters:
 pickplace, horizon=40, behavior_epoch=30
 doubledraweropen, horizon=50, behavior_epoch=40
-doubledrawercloseopen, horizon=80
-doubledrawerpickplaceopen
+doubledrawercloseopen, horizon=80, behavior_epoch=40
+doubledrawerpickplaceopen, horizon=80, behavior_epoch=40
 '''
 
 def get_args():
@@ -197,6 +194,26 @@ def train(args=get_args()):
         action_dim = np.prod(args.action_shape)
 
         prior_data_path = os.path.join(args.data_dir, "blocked_drawer_1_prior.npy")
+        task_data_path = os.path.join(args.data_dir, "drawer_task.npy")
+
+        diff_dataset, _ = get_doubledrawer_dataset(
+            prior_data_path=prior_data_path,
+            task_data_path=task_data_path,
+            sample_ratio =args.sample_ratio, 
+            task_weight=args.task_weight)
+        dyn_dataset, init_obss_dataset = get_doubledrawer_dataset(
+            prior_data_path=prior_data_path,
+            task_data_path=task_data_path)
+    elif args.task == 'doubledrawerpickplaceopen':
+        env = roboverse.make('Widow250DoubleDrawerPickPlaceOpenGraspNeutral-v0')
+        env = DoubleDrawerObsWrapper(env)
+        obs_space = env.observation_space
+        args.obs_shape = obs_space.shape
+        obs_dim = np.prod(args.obs_shape)
+        args.action_shape = env.action_space.shape
+        action_dim = np.prod(args.action_shape)
+
+        prior_data_path = os.path.join(args.data_dir, "blocked_drawer_2_prior.npy")
         task_data_path = os.path.join(args.data_dir, "drawer_task.npy")
 
         diff_dataset, _ = get_doubledrawer_dataset(

@@ -16,17 +16,17 @@ from offlinerlkit.buffer import ReplayBuffer
 from offlinerlkit.utils.logger import Logger, make_log_dirs
 from offlinerlkit.policy_trainer import MFPolicyTrainer
 from offlinerlkit.policy import CQLPolicy
-from offlinerlkit.utils.pickplace_utils import SimpleObsWrapper
+from offlinerlkit.utils.roboverse_utils import PickPlaceObsWrapper, DoubleDrawerObsWrapper, get_pickplace_dataset, get_doubledrawer_dataset
 
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--algo-name", type=str, default="mbcql")
     parser.add_argument("--task", type=str, default="pickplace")
+    parser.add_argument('--last_eval', action='store_false', help="Show eval result for every epoch if False")
 
     # env config (pickplace)
     parser.add_argument('--horizon', type=int, default=40, help="max path length for pickplace")
     parser.add_argument('--rollout_ckpt_path', type=str, required=True, help="dir path, used to load mbrcsl rollout trajectories" )
-    parser.add_argument('--last_eval', action='store_false', help="Show eval result for every epoch if False")
 
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--hidden-dims", type=int, nargs='*', default=[256, 256, 256])
@@ -50,7 +50,7 @@ def get_args():
     
     parser.add_argument("--epoch", type=int, default=200)
     parser.add_argument("--step-per-epoch", type=int, default=1000)
-    parser.add_argument("--eval_episodes", type=int, default=10)
+    parser.add_argument("--eval_episodes", type=int, default=100)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
 
@@ -67,7 +67,7 @@ def train(args=get_args()):
     # create env and dataset
     if args.task == 'pickplace':
         env = roboverse.make('Widow250PickTray-v0')
-        env = SimpleObsWrapper(env)
+        env = PickPlaceObsWrapper(env)
         obs_space = env.observation_space
         args.obs_shape = obs_space.shape
         args.obs_dim = np.prod(args.obs_shape)
@@ -80,7 +80,53 @@ def train(args=get_args()):
         rollout_data_all = ckpt_dict['data'] # should be dict
         num_traj_all = ckpt_dict['num_traj']
         print(f"Loaded {num_traj_all} rollout trajectories")
+    elif args.task == 'doubledraweropen':
+        env = roboverse.make('Widow250DoubleDrawerOpenGraspNeutral-v0')
+        env = DoubleDrawerObsWrapper(env)
+        obs_space = env.observation_space
+        args.obs_shape = obs_space.shape
+        args.obs_dim = np.prod(args.obs_shape)
+        args.action_shape = env.action_space.shape
+        args.action_dim = np.prod(args.action_shape)
 
+        data_path = os.path.join(args.rollout_ckpt_path, "rollout.dat")
+        ckpt_dict = pickle.load(open(data_path,"rb")) # checkpoint in dict type
+        
+        rollout_data_all = ckpt_dict['data'] # should be dict
+        num_traj_all = ckpt_dict['num_traj']
+        print(f"Loaded {num_traj_all} rollout trajectories")
+    elif args.task == 'doubledrawercloseopen':
+        env = roboverse.make('Widow250DoubleDrawerCloseOpenGraspNeutral-v0')
+        env = DoubleDrawerObsWrapper(env)
+        obs_space = env.observation_space
+        args.obs_shape = obs_space.shape
+        args.obs_dim = np.prod(args.obs_shape)
+        args.action_shape = env.action_space.shape
+        args.action_dim = np.prod(args.action_shape)
+
+        data_path = os.path.join(args.rollout_ckpt_path, "rollout.dat")
+        ckpt_dict = pickle.load(open(data_path,"rb")) # checkpoint in dict type
+        
+        rollout_data_all = ckpt_dict['data'] # should be dict
+        num_traj_all = ckpt_dict['num_traj']
+        print(f"Loaded {num_traj_all} rollout trajectories")
+    elif args.task == 'doubledrawerpickplaceopen':
+        env = roboverse.make('Widow250DoubleDrawerPickPlaceOpenGraspNeutral-v0')
+        env = DoubleDrawerObsWrapper(env)
+        obs_space = env.observation_space
+        args.obs_shape = obs_space.shape
+        args.obs_dim = np.prod(args.obs_shape)
+        args.action_shape = env.action_space.shape
+        args.action_dim = np.prod(args.action_shape)
+
+        data_path = os.path.join(args.rollout_ckpt_path, "rollout.dat")
+        ckpt_dict = pickle.load(open(data_path,"rb")) # checkpoint in dict type
+        
+        rollout_data_all = ckpt_dict['data'] # should be dict
+        num_traj_all = ckpt_dict['num_traj']
+        print(f"Loaded {num_traj_all} rollout trajectories")
+    else:
+        raise NotImplementedError
     env.reset(seed=args.seed)
 
     # create policy model
