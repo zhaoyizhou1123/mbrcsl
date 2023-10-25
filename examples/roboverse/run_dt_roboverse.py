@@ -39,7 +39,7 @@ def get_args():
     parser.add_argument("--n_layer", type=int, default=4)
     parser.add_argument("--n_head", type=int, default=4)
     parser.add_argument("--n_embd", type=int, default=32)
-    parser.add_argument('--ctx', type=int, default=1)
+    parser.add_argument('--ctx', type=int, default=10)
     parser.add_argument('--embed_dim', type=int, default=128, help="dt token embedding dimension")
 
     # Train

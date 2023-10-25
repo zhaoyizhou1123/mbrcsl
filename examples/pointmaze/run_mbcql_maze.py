@@ -31,7 +31,7 @@ def get_args():
     parser.add_argument('--maze_config_file', type=str, default='envs/pointmaze/config/maze_default.json')
 
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--hidden-dims", type=int, nargs='*', default=[256, 256, 256])
+    parser.add_argument("--hidden-dims", type=int, nargs='*', default=[1024,1024])
     parser.add_argument("--actor-lr", type=float, default=1e-4)
     parser.add_argument("--critic-lr", type=float, default=3e-4)
     parser.add_argument("--gamma", type=float, default=0.99)

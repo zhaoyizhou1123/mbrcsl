@@ -77,7 +77,7 @@ def get_args():
     parser.add_argument("--rcsl_weight_decay", type=float, default=0.1)
     parser.add_argument("--eval_episodes", type=int, default=10)
     parser.add_argument("--holdout_ratio", type=float, default=0.1)
-    parser.add_argument("--find_best_start", type=int, default=50)
+    parser.add_argument("--find_best_start", type=int, default=80)
 
     return parser.parse_args()
 

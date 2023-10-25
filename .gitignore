@@ -13,7 +13,9 @@ logs_scp/
 *.dat
 *.sif
 *.sbatch
-scripts/
+*.sh
+!scripts/*/run.sh
+!scripts/*/ablation.sh
 !backup/*.out
 test*.py
 dataset/

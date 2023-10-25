@@ -24,7 +24,6 @@ Recommended hyperparameters:
 pickplace, horizon=40, behavior_epoch=30
 doubledraweropen, horizon=50, behavior_epoch=40
 doubledrawercloseopen, horizon=80, behavior_epoch=40
-doubledrawerpickplaceopen, horizon=80, behavior_epoch=40
 '''
 
 def get_args():

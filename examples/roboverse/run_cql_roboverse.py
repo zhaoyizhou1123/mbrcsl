@@ -17,6 +17,13 @@ from offlinerlkit.policy_trainer import MFPolicyTrainer
 from offlinerlkit.policy import CQLPolicy
 from offlinerlkit.utils.roboverse_utils import PickPlaceObsWrapper, DoubleDrawerObsWrapper, get_pickplace_dataset, get_doubledrawer_dataset
 
+'''
+Recommended hyperparameters:
+pickplace, horizon=40, cql_weight=1.0
+doubledraweropen, horizon=50, cql_weight=5.0
+doubledrawercloseopen, horizon=80, behavior_epoch=2.0
+'''
+
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--algo-name", type=str, default="cql")
