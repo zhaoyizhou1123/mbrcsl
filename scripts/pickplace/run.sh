@@ -24,7 +24,7 @@ python examples/roboverse/run_cql_roboverse.py \
     --data_dir ${data_dir} \
     --task ${task} \
     --horizon ${horizon} \
-    --cql_weight 1.0
+    --cql-weight 1.0
 done
 
 # combo
