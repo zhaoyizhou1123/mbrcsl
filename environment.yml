@@ -1,0 +1,23 @@
+name: mbrcsl
+channels:
+    - defaults
+dependencies:
+    - python=3.7.16
+    - pip
+    - pip:
+        - --extra-index-url https://download.pytorch.org/whl/cu117
+        - numpy
+        - torch==1.13.1+cu117
+        - torchaudio==0.13.1+cu117
+        - torchvision==0.14.1+cu117
+        - tensorflow==2.8.4
+        - tensorboard==2.8.0
+        - gym ==0.23.1
+        - gymnasium==0.28.1
+        - gymnasium-robotics==1.2.2
+        - transformers==4.30.2
+        - diffusers==0.11.1
+        - pybullet==3.2.5
+        - wandb
+        - tqdm
+        - gdown
