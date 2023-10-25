@@ -1,10 +1,16 @@
 # MBRCSL
-Model-based return-conditioned supervised learning
+Code for experiment results in paper "Free from Bellman Completeness:
+Trajectory Stitching via Model-based
+Return-conditioned Supervised Learning".
 
 ## Installation
-1. Install dependencies according to `requirements.txt`
+1. Install dependencies by running
+```
+$ conda env create -f environment.yml
+$ conda activate mbrcsl
+```
 
-2. Add this repo directory to your `PYTHONPATH` environment variable.
+2. Add this repository directory to your `PYTHONPATH` environment variable.
 ```
 export PYTHONPATH="$PYTHONPATH:$(pwd)"
 ```
