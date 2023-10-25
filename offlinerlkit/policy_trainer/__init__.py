@@ -3,6 +3,7 @@ from offlinerlkit.policy_trainer.mb_policy_trainer import MBPolicyTrainer
 from offlinerlkit.policy_trainer.rcsl_policy_trainer import RcslPolicyTrainer
 from offlinerlkit.policy_trainer.diffusion_policy_trainer import DiffusionPolicyTrainer
 from offlinerlkit.policy_trainer.dt_policy_trainer import SequenceTrainer, TrainerConfig
+from offlinerlkit.policy_trainer.bc_policy_trainer import ActTrainer
 
 __all__ = [
     "MFPolicyTrainer",
@@ -10,5 +11,6 @@ __all__ = [
     "RcslPolicyTrainer",
     "DiffusionPolicyTrainer",
     "SequenceTrainer",
-    "TrainerConfig"
+    "TrainerConfig",
+    "ActTrainer"
 ]

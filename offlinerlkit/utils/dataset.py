@@ -95,7 +95,7 @@ class TrajCtxFloatLengthDataset(Dataset):
 
     def __init__(self, trajs, ctx = 1, single_timestep = False, keep_ctx = True, with_mask=False, state_normalize=False):    
         '''
-        trajs: list(traj), namedtuple "observations", "actions", "rewards", "returns", "timesteps", "terminated", "truncated", "infos" \n
+        trajs: list(traj), namedtuple with attributes "observations", "actions", "rewards", "returns", "timesteps" \n
         single_timestep: bool. If true, timestep only keep initial step; Else (ctx,) \n
         keep_ctx: If False, ctx must be set 1, and we will not keep ctx dimension.
         with_mask: If true, also return attention mask. For DT

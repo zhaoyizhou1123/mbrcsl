@@ -20,6 +20,8 @@ from offlinerlkit.policy.diffusion.simple_diffusion import SimpleDiffusionPolicy
 from offlinerlkit.policy.rcsl.rcsl_autoregressive import AutoregressivePolicy
 from offlinerlkit.policy.rcsl.rcsl_mlp import RcslPolicy
 from offlinerlkit.policy.decision_transformer.decision_transformer import DecisionTransformer
+from offlinerlkit.policy.bc.mlp_bc import MLPBCModel
+from offlinerlkit.policy.rcsl.rcsl_mlp_gauss import RcslGaussianPolicy
 
 __all__ = [
     "BasePolicy",
@@ -37,5 +39,7 @@ __all__ = [
     "SimpleDiffusionPolicy",
     "RcslPolicy",
     "AutoregressivePolicy",
-    "DecisionTransformer"
+    "DecisionTransformer",
+    "MLPBCModel",
+    "RcslGaussianPolicy"
 ]

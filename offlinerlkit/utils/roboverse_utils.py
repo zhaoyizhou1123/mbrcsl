@@ -233,7 +233,6 @@ def get_pickplace_dataset_dt(
 
     Return:
         dataset: list trajs: namedtuple with keys "observations", "actions", "rewards", "returns", "timesteps" 
-        init_obss: np.ndarray (num_traj, obs_dim)
     '''
     SimpleTrajectory = namedtuple(
     "SimpleTrajectory", ["observations", "actions", "rewards", "returns", "timesteps"])

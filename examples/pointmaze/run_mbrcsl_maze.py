@@ -33,7 +33,7 @@ pointmaze
 def get_args():
     parser = argparse.ArgumentParser()
     # general
-    parser.add_argument("--algo-name", type=str, default="mbrcsl")
+    parser.add_argument("--algo_name", type=str, default="mbrcsl")
     parser.add_argument("--task", type=str, default="pointmaze", help="task name")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--num_workers", type=int, default=1, help="Dataloader workers, align with cpu number")

@@ -49,13 +49,10 @@ def create_env(args):
     target_map = set_map_cell(map, goal, 'g')
     target_map = set_map_cell(target_map, start, 'r')
 
-    render_mode = "human" if args.render else "None"
-
     env = gymnasium.make('PointMaze_UMazeDense-v3', 
              maze_map = target_map, 
              continuing_task = False,
-             max_episode_steps=args.horizon,
-             render_mode=render_mode)
+             max_episode_steps=args.horizon)
     
     return env
 
