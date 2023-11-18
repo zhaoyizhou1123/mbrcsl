@@ -55,6 +55,7 @@ def get_args():
     parser.add_argument("--dynamics_weight_decay", type=float, nargs='*', default=[2.5e-5, 5e-5, 7.5e-5, 7.5e-5, 1e-4])
     parser.add_argument("--dynamics_lr", type=float, default=1e-3)
     parser.add_argument("--load_dynamics_path", type=none_or_str, default=None)
+    parser.add_argument("--dynamics_epoch", type=int, default=-1, help="-1 means None")
 
     # Behavior policy (diffusion)
     parser.add_argument("--behavior_epoch", type=int, default=50)
@@ -78,6 +79,7 @@ def get_args():
     parser.add_argument("--eval_episodes", type=int, default=10)
     parser.add_argument("--holdout_ratio", type=float, default=0.1)
     parser.add_argument("--find_best_start", type=int, default=80)
+    parser.add_argument("--improve_threshold", type=float, default=0.01)
 
     return parser.parse_args()
 
@@ -248,7 +250,11 @@ def train(args=get_args()):
             dynamics.load(args.load_dynamics_path)
         else: 
             print(f"Train dynamics")
-            dynamics.train(dyn_dataset, logger)
+            if args.dynamics_epoch == -1:
+                max_epochs = None
+            else:
+                max_epochs = args.dynamics_epoch
+            dynamics.train(dyn_dataset, logger, max_epochs = max_epochs)
         
     def get_rollout_policy():
         '''
@@ -413,7 +419,7 @@ def train(args=get_args()):
 
     rcsl_logger.log(f"Desired return: {max_rollout_return}")
 
-    policy_trainer.train(holdout_ratio=args.holdout_ratio, last_eval=args.last_eval, find_best_start=args.find_best_start)
+    policy_trainer.train(holdout_ratio=args.holdout_ratio, last_eval=args.last_eval, find_best_start=args.find_best_start, improve_threshold = args.improve_threshold)
 
 
 if __name__ == "__main__":

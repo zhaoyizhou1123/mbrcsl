@@ -64,7 +64,7 @@ class RcslPolicyTrainer:
         assert (not self.is_gymnasium_env) or (self.horizon is not None), "Horizon must be specified for Gymnasium env"
         self.has_terminal = has_terminal
 
-    def train(self, holdout_ratio: float = 0.1, last_eval = False, find_best_start: Optional[int] = None) -> Dict[str, float]:
+    def train(self, holdout_ratio: float = 0.1, last_eval = False, find_best_start: Optional[int] = None, improve_threshold: float = 0.01) -> Dict[str, float]:
         '''
         last_eval: If True, only evaluates at the last epoch
         find_best_start: If >=0, begin to find the best epoch by holdout loss
@@ -127,7 +127,7 @@ class RcslPolicyTrainer:
             if has_holdout:
                 holdout_loss = self.validate(holdout_dataset)
                 if stop_by_holdout and e >= find_best_start: # test holdout improvement
-                    if (best_holdout_loss - holdout_loss) / best_holdout_loss > 0.01:
+                    if (best_holdout_loss - holdout_loss) / best_holdout_loss > improve_threshold:
                         best_holdout_loss = holdout_loss
                         best_policy_dict = deepcopy(self.policy.state_dict())
                         epochs_since_upd = 0

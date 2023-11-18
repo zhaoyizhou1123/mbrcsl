@@ -1,3 +1,5 @@
+# Behavior policy ablation study
+
 import numpy as np
 import torch
 import roboverse
@@ -11,13 +13,19 @@ from typing import Dict, Tuple
 from collections import defaultdict
 import datetime
 
-from offlinerlkit.modules import TransformerDynamicsModel
+from offlinerlkit.modules import TransformerDynamicsModel, RcslModule
 from offlinerlkit.dynamics import TransformerDynamics
-from offlinerlkit.utils.roboverse_utils import PickPlaceObsWrapper, DoubleDrawerObsWrapper, get_pickplace_dataset, get_doubledrawer_dataset
+from offlinerlkit.utils.roboverse_utils import PickPlaceObsWrapper, DoubleDrawerObsWrapper, \
+    get_pickplace_dataset_dt, get_doubledrawer_dataset_dt, \
+    get_pickplace_dataset, get_doubledrawer_dataset
 from offlinerlkit.utils.logger import Logger, make_log_dirs
 from offlinerlkit.policy_trainer import RcslPolicyTrainer, DiffusionPolicyTrainer
 from offlinerlkit.utils.none_or_str import none_or_str
-from offlinerlkit.policy import SimpleDiffusionPolicy, AutoregressivePolicy
+from offlinerlkit.policy import SimpleDiffusionPolicy, AutoregressivePolicy, RcslPolicy
+from offlinerlkit.nets import MLP
+from offlinerlkit.utils.dataset import TrajCtxFloatLengthDataset
+from offlinerlkit.policy import DecisionTransformer
+from offlinerlkit.policy_trainer import SequenceTrainer, TrainerConfig
 
 '''
 Recommended hyperparameters:
@@ -29,7 +37,7 @@ doubledrawercloseopen, horizon=80, behavior_epoch=40
 def get_args():
     parser = argparse.ArgumentParser()
     # general
-    parser.add_argument("--algo_name", type=str, default="mbrcsl")
+    parser.add_argument("--algo-name", type=str, default="mbrcsl_dtbeh")
     parser.add_argument("--task", type=str, default="pickplace", help="task name")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--num_workers", type=int, default=1, help="Dataloader workers, align with cpu number")
@@ -48,13 +56,20 @@ def get_args():
     parser.add_argument("--dynamics_epoch", type=int, default=80)
     parser.add_argument("--load_dynamics_path", type=none_or_str, default=None)
 
-    # Behavior policy (diffusion)
+    # Behavior policy
     parser.add_argument("--behavior_epoch", type=int, default=30)
-    parser.add_argument("--num_diffusion_iters", type=int, default=5, help="Number of diffusion steps")
     parser.add_argument('--behavior_batch', type=int, default=256)
     parser.add_argument('--load_diffusion_path', type=none_or_str, default=None)
     parser.add_argument('--task_weight', type=float, default=1.4, help="Weight on task data when training diffusion policy")
     parser.add_argument('--sample_ratio', type=float, default=0.8, help="Use (sample_ratio * num_total_data) data to train diffusion policy")
+    parser.add_argument("--behavior_lr", type=float, default=1e-3)
+    parser.add_argument("--behavior_weight_decay", type=float, default=0.1)
+    # parser.add_argument("--n_layer", type=int, default=4)
+    # parser.add_argument("--n_head", type=int, default=4)
+    # parser.add_argument("--n_embd", type=int, default=32)
+    parser.add_argument('--ctx', type=int, default=10)
+    parser.add_argument('--embed_dim', type=int, default=128, help="dt token embedding dimension")
+    parser.add_argument('--goal_mul', type=float, default=1., help="goal = max_dataset_return * goal_mul")
     
     # Rollout 
     parser.add_argument('--rollout_ckpt_path', type=none_or_str, default=None, help="file dir, used to load/store rollout trajs" )
@@ -74,7 +89,7 @@ def get_args():
 
 def rollout_simple(
     init_obss: np.ndarray,
-    dynamics: TransformerDynamicsModel,
+    dynamics: TransformerDynamics,
     rollout_policy: SimpleDiffusionPolicy,
     rollout_length: int
 ) -> Tuple[Dict[str, np.ndarray], Dict]:
@@ -134,6 +149,104 @@ def rollout_simple(
     return rollout_transitions, \
         {"num_transitions": num_transitions, "reward_mean": rewards_arr.mean(), "returns": returns, "max_rewards": max_rewards, "rewards_full": rewards_full}
 
+def rollout(    
+    init_obss: np.ndarray,
+    dynamics: TransformerDynamics,
+    rollout_policy: DecisionTransformer,
+    rollout_length: int,
+    state_mean,
+    state_std,
+    device,
+    action_dim,
+    ctx):
+    '''
+    state_mean/std: Used for state normalization. Get from offline_dataset only currently
+    '''
+    # state_mean, state_std = self.offline_dataset.get_normalize_coef()
+    rollout_policy.train(False)
+    rets = [] # list of returns achieved in each epoch
+    batch = init_obss.shape[0]
+    states = torch.from_numpy(init_obss)
+    states = states.type(torch.float32).to(device).unsqueeze(1) # (b,1,state_dim)
+    rtgs = torch.zeros(batch, 1, 1).to(device) # (b,1,1)
+    timesteps = torch.zeros(batch,1).to(device) # (b,1)
+    
+    # Initialize action
+    actions = torch.empty((batch,0,action_dim)).to(device) # Actions are represented in one-hot
+
+    num_transitions = 0
+    rewards_arr = np.array([])
+    rollout_transitions = defaultdict(list)
+    valid_idxs = np.arange(init_obss.shape[0]) # maintain current valid trajectory indexes
+    returns = np.zeros(init_obss.shape[0]) # maintain return of each trajectory
+    acc_returns = np.zeros(init_obss.shape[0]) # maintain accumulated return of each valid trajectory
+    max_rewards = np.zeros(init_obss.shape[0]) # maintain max reward seen in trajectory
+    rewards_full = np.zeros((init_obss.shape[0], rollout_length)) # full rewards (batch, H)
+
+    for h in range(rollout_length):
+        # Get action
+        pred_action = rollout_policy.select_action((states - state_mean) / state_std,
+                                                actions.type(torch.float32),
+                                                rtgs.type(torch.float32),
+                                                timesteps.type(torch.float32)) # (b, act_dim)
+
+        # Observe next states, rewards,
+        # if self.is_gym:
+        #     next_state, reward, terminated, _ = env.step(pred_action.detach().cpu().numpy()) # (state_dim), scalar
+        # else:
+        #     next_state, reward, terminated, _, _ = env.step(pred_action.detach().cpu().numpy()) # (state_dim), scalar
+        next_state, reward, terminal, _ = dynamics.step(states[:, -1, :].detach().cpu().numpy(), pred_action.detach().cpu().numpy()) # (batch, )
+        rollout_transitions["observations"].append(states[:,0,:].detach().cpu().numpy())
+        rollout_transitions["next_observations"].append(next_state)
+        rollout_transitions["actions"].append(pred_action.detach().cpu().numpy())
+        rollout_transitions["rewards"].append(reward)
+        rollout_transitions["terminals"].append(terminal)
+        rollout_transitions["traj_idxs"].append(valid_idxs)
+        rollout_transitions["acc_rets"].append(acc_returns)
+
+        reward = reward.reshape(batch) # (B)
+        rewards_full[:, h] = reward
+
+        num_transitions += len(next_state)
+        rewards_arr = np.append(rewards_arr, reward.flatten())
+        returns = returns + reward.flatten() # Update return (for valid idxs only)
+        max_rewards = np.maximum(max_rewards, reward.flatten()) # Update max reward
+        acc_returns = acc_returns + reward.flatten()
+
+        next_state = torch.from_numpy(next_state)
+        # Calculate return
+        # returns += reward
+        
+        # Update states, actions, rtgs, timesteps
+        next_state = next_state.unsqueeze(1).to(device) # (b,1,state_dim)
+        states = torch.cat([states, next_state], dim=1)
+        states = states[:, -ctx: , :] # truncate to ctx_length
+
+        pred_action = pred_action.unsqueeze(1).to(device) # (b, 1, action_dim)
+        
+        if ctx > 1:
+            actions = torch.cat([actions, pred_action], dim=1)
+            actions = actions[:, -ctx+1: , :] # actions length is ctx-1
+
+        next_rtg = torch.zeros(batch,1,1).to(device)
+        rtgs = torch.cat([rtgs, next_rtg], dim=1)
+        rtgs = rtgs[:, -ctx: , :]
+
+        # Update timesteps
+        timesteps = torch.cat([timesteps, (h+1)*torch.ones(batch,1).to(device)], dim = 1) 
+        timesteps = timesteps[:, -ctx: ]
+
+    for k, v in rollout_transitions.items():
+        rollout_transitions[k] = np.concatenate(v, axis=0)
+
+    traj_idxs = rollout_transitions["traj_idxs"]
+    final_rtgs = returns[traj_idxs] - rollout_transitions["acc_rets"]
+    # rtgs = returns[traj_idxs] 
+    rollout_transitions["rtgs"] = final_rtgs[..., None] # (N,1)
+
+    return rollout_transitions, \
+        {"num_transitions": num_transitions, "reward_mean": rewards_arr.mean(), "returns": returns, "max_rewards": max_rewards, "rewards_full": rewards_full}
+
 def train(args=get_args()):
     # seed
     random.seed(args.seed)
@@ -155,11 +268,14 @@ def train(args=get_args()):
         prior_data_path = os.path.join(args.data_dir, "pickplace_prior.npy")
         task_data_path = os.path.join(args.data_dir, "pickplace_task.npy")
 
-        diff_dataset, _ = get_pickplace_dataset(
+
+        prior_data_path = os.path.join(args.data_dir, "pickplace_prior.npy")
+        task_data_path = os.path.join(args.data_dir, "pickplace_task.npy")
+
+        trajs = get_pickplace_dataset_dt(
             prior_data_path=prior_data_path,
-            task_data_path=task_data_path,
-            sample_ratio =args.sample_ratio, 
-            task_weight=args.task_weight)
+            task_data_path=task_data_path)
+        
         dyn_dataset, init_obss_dataset = get_pickplace_dataset(
             prior_data_path=prior_data_path,
             task_data_path=task_data_path)
@@ -175,11 +291,9 @@ def train(args=get_args()):
         prior_data_path = os.path.join(args.data_dir, "closed_drawer_prior.npy")
         task_data_path = os.path.join(args.data_dir, "drawer_task.npy")
 
-        diff_dataset, _ = get_doubledrawer_dataset(
+        trajs = get_doubledrawer_dataset_dt(
             prior_data_path=prior_data_path,
-            task_data_path=task_data_path,
-            sample_ratio =args.sample_ratio, 
-            task_weight=args.task_weight)
+            task_data_path=task_data_path)
         dyn_dataset, init_obss_dataset = get_doubledrawer_dataset(
             prior_data_path=prior_data_path,
             task_data_path=task_data_path)
@@ -195,11 +309,9 @@ def train(args=get_args()):
         prior_data_path = os.path.join(args.data_dir, "blocked_drawer_1_prior.npy")
         task_data_path = os.path.join(args.data_dir, "drawer_task.npy")
 
-        diff_dataset, _ = get_doubledrawer_dataset(
+        trajs = get_doubledrawer_dataset_dt(
             prior_data_path=prior_data_path,
-            task_data_path=task_data_path,
-            sample_ratio =args.sample_ratio, 
-            task_weight=args.task_weight)
+            task_data_path=task_data_path)
         dyn_dataset, init_obss_dataset = get_doubledrawer_dataset(
             prior_data_path=prior_data_path,
             task_data_path=task_data_path)
@@ -215,11 +327,9 @@ def train(args=get_args()):
         prior_data_path = os.path.join(args.data_dir, "blocked_drawer_2_prior.npy")
         task_data_path = os.path.join(args.data_dir, "drawer_task.npy")
 
-        diff_dataset, _ = get_doubledrawer_dataset(
+        trajs = get_doubledrawer_dataset_dt(
             prior_data_path=prior_data_path,
-            task_data_path=task_data_path,
-            sample_ratio =args.sample_ratio, 
-            task_weight=args.task_weight)
+            task_data_path=task_data_path)
         dyn_dataset, init_obss_dataset = get_doubledrawer_dataset(
             prior_data_path=prior_data_path,
             task_data_path=task_data_path)
@@ -227,6 +337,9 @@ def train(args=get_args()):
         raise NotImplementedError
 
     env.reset(seed=args.seed)
+    behavior_dataset = TrajCtxFloatLengthDataset(trajs, ctx = args.ctx, single_timestep = False, with_mask=True)
+    # goal = behavior_dataset.get_max_return() * args.goal_mul
+    goal = 0
 
     timestamp = datetime.datetime.now().strftime("%y-%m%d-%H%M%S")
     exp_name = f"timestamp_{timestamp}&{args.seed}"
@@ -269,41 +382,45 @@ def train(args=get_args()):
     )
 
     # create rollout policy
-    diffusion_policy = SimpleDiffusionPolicy(
-        obs_shape = args.obs_shape,
-        act_shape= args.action_shape,
-        feature_dim = 1,
-        num_training_steps = args.behavior_epoch,
-        num_diffusion_steps = args.num_diffusion_iters,
-        device = args.device
-    )
+    behavior_policy = DecisionTransformer(
+        state_dim=obs_dim,
+        act_dim=action_dim,
+        max_length=args.ctx,
+        max_ep_len=args.horizon,
+        action_tanh=False, # no tanh function
+        hidden_size=args.embed_dim,
+        n_layer=args.n_layer,
+        n_head=args.n_head,
+        n_inner=4*args.embed_dim,
+        activation_function='relu',
+        n_positions=1024,
+        resid_pdrop=0.1,
+        attn_pdrop=0.1)
 
-    diff_lr_scheduler = diffusion_policy.get_lr_scheduler()
+    lr_scheduler=None
 
-    diff_log_dirs = make_log_dirs(args.task, args.algo_name, exp_name, vars(args), part="diffusion")
-    print(f"Logging diffusion to {diff_log_dirs}")
+    behavior_log_dirs = make_log_dirs(args.task, args.algo_name, exp_name, vars(args), part="behavior_trans")
+    print(f"Logging behavior to {behavior_log_dirs}")
     # key: output file name, value: output handler type
-    diff_output_config = {
+    behavior_output_config = {
         "consoleout_backup": "stdout",
         "policy_training_progress": "csv",
-        "dynamics_training_progress": "csv",
         "tb": "tensorboard"
     }
-    diff_logger = Logger(diff_log_dirs, diff_output_config)
-    diff_logger.log_hyperparameters(vars(args))
+    behavior_logger = Logger(behavior_log_dirs, behavior_output_config)
+    behavior_logger.log_hyperparameters(vars(args))
 
-    diff_policy_trainer = DiffusionPolicyTrainer(
-        policy = diffusion_policy,
-        offline_dataset = diff_dataset,
-        logger = diff_logger,
-        seed = args.seed,
-        epoch = args.behavior_epoch,
-        batch_size = args.behavior_batch,
-        lr_scheduler = diff_lr_scheduler,
-        horizon = args.horizon,
-        num_workers = args.num_workers,
-        has_terminal = False,
-    )
+    tconf = TrainerConfig(
+                max_epochs=args.behavior_epoch, batch_size=args.behavior_batch, lr=args.behavior_lr,
+                lr_decay=True, num_workers=1, horizon=args.horizon, 
+                grad_norm_clip = 1.0, eval_repeat = 1, desired_rtg=goal, 
+                env = env, ctx = args.ctx, device=args.device, 
+                debug = False, logger = behavior_logger, last_eval = True)
+    behavior_policy_trainer = SequenceTrainer(
+        config=tconf,
+        model=behavior_policy,
+        offline_dataset=behavior_dataset,
+        is_gym = True)
 
     # Training helper functions
     def get_dynamics():
@@ -327,11 +444,11 @@ def train(args=get_args()):
         if args.load_diffusion_path is not None:
             print(f"Load behavior policy from {args.load_diffusion_path}")
             with open(args.load_diffusion_path, 'rb') as f:
-                state_dict = torch.load(f, map_location= args.device)
-            diffusion_policy.load_state_dict(state_dict)
+                behavior_policy_model = torch.load(f, map_location= args.device)
+            behavior_policy.load_state_dict(behavior_policy_model.state_dict())
         else:
-            print(f"Train diffusion behavior policy")
-            diff_policy_trainer.train() # save checkpoint periodically
+            print(f"Train behavior policy")
+            behavior_policy_trainer.train() # save checkpoint periodically
 
     def get_rollout_trajs(logger: Logger, threshold = 0.9) -> Tuple[Dict[str, np.ndarray], float]:
         '''
@@ -375,11 +492,14 @@ def train(args=get_args()):
         get_dynamics()
         get_rollout_policy()
 
+        state_mean, state_std = behavior_dataset.get_normalize_coef()
+
         with torch.no_grad():
             for epoch in range(start_epoch, args.rollout_epoch):
                 batch_indexs = np.random.randint(0, init_obss_dataset.shape[0], size=args.rollout_batch)
                 init_obss = init_obss_dataset[batch_indexs]
-                rollout_data, rollout_info = rollout_simple(init_obss, dynamics, diffusion_policy, args.horizon)
+                rollout_data, rollout_info = rollout(init_obss, dynamics, behavior_policy, args.horizon,
+                                                     state_mean, state_std, device, action_dim, args.ctx)
                     # print(pred_state)
 
                 # Only keep trajs with returns > threshold

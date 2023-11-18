@@ -1,3 +1,5 @@
+# Behavior policy ablation study
+
 import numpy as np
 import torch
 import roboverse
@@ -11,13 +13,14 @@ from typing import Dict, Tuple
 from collections import defaultdict
 import datetime
 
-from offlinerlkit.modules import TransformerDynamicsModel
+from offlinerlkit.modules import TransformerDynamicsModel, RcslModule
 from offlinerlkit.dynamics import TransformerDynamics
 from offlinerlkit.utils.roboverse_utils import PickPlaceObsWrapper, DoubleDrawerObsWrapper, get_pickplace_dataset, get_doubledrawer_dataset
 from offlinerlkit.utils.logger import Logger, make_log_dirs
 from offlinerlkit.policy_trainer import RcslPolicyTrainer, DiffusionPolicyTrainer
 from offlinerlkit.utils.none_or_str import none_or_str
-from offlinerlkit.policy import SimpleDiffusionPolicy, AutoregressivePolicy
+from offlinerlkit.policy import SimpleDiffusionPolicy, AutoregressivePolicy, RcslPolicy
+from offlinerlkit.nets import MLP
 
 '''
 Recommended hyperparameters:
@@ -29,7 +32,7 @@ doubledrawercloseopen, horizon=80, behavior_epoch=40
 def get_args():
     parser = argparse.ArgumentParser()
     # general
-    parser.add_argument("--algo_name", type=str, default="mbrcsl")
+    parser.add_argument("--algo-name", type=str, default="mbrcsl_mlpbeh")
     parser.add_argument("--task", type=str, default="pickplace", help="task name")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--num_workers", type=int, default=1, help="Dataloader workers, align with cpu number")
@@ -48,13 +51,15 @@ def get_args():
     parser.add_argument("--dynamics_epoch", type=int, default=80)
     parser.add_argument("--load_dynamics_path", type=none_or_str, default=None)
 
-    # Behavior policy (diffusion)
+    # Behavior policy
     parser.add_argument("--behavior_epoch", type=int, default=30)
-    parser.add_argument("--num_diffusion_iters", type=int, default=5, help="Number of diffusion steps")
     parser.add_argument('--behavior_batch', type=int, default=256)
     parser.add_argument('--load_diffusion_path', type=none_or_str, default=None)
     parser.add_argument('--task_weight', type=float, default=1.4, help="Weight on task data when training diffusion policy")
     parser.add_argument('--sample_ratio', type=float, default=0.8, help="Use (sample_ratio * num_total_data) data to train diffusion policy")
+    parser.add_argument("--behavior_hidden_dims", type=int, nargs='*', default=[200,200,200,200])
+    parser.add_argument("--behavior_lr", type=float, default=1e-3)
+    parser.add_argument("--behavior_weight_decay", type=float, default=0.1)
     
     # Rollout 
     parser.add_argument('--rollout_ckpt_path', type=none_or_str, default=None, help="file dir, used to load/store rollout trajs" )
@@ -269,19 +274,29 @@ def train(args=get_args()):
     )
 
     # create rollout policy
-    diffusion_policy = SimpleDiffusionPolicy(
-        obs_shape = args.obs_shape,
-        act_shape= args.action_shape,
-        feature_dim = 1,
-        num_training_steps = args.behavior_epoch,
-        num_diffusion_steps = args.num_diffusion_iters,
+    behavior_backbone = MLP(
+        input_dim = obs_dim + 1,
+        hidden_dims = args.behavior_hidden_dims,
+        output_dim = action_dim,
+        init_last = True
+    )
+
+    behavior_module = RcslModule(
+        behavior_backbone,
+        device = args.device
+    )
+    behavior_optim = torch.optim.Adam(behavior_module.parameters(), lr=args.behavior_lr, weight_decay=args.behavior_weight_decay)
+
+    behavior_policy = RcslPolicy(
+        behavior_module,
+        behavior_optim,
         device = args.device
     )
 
-    diff_lr_scheduler = diffusion_policy.get_lr_scheduler()
+    lr_scheduler=None
 
     diff_log_dirs = make_log_dirs(args.task, args.algo_name, exp_name, vars(args), part="diffusion")
-    print(f"Logging diffusion to {diff_log_dirs}")
+    print(f"Logging behavior to {diff_log_dirs}")
     # key: output file name, value: output handler type
     diff_output_config = {
         "consoleout_backup": "stdout",
@@ -292,17 +307,22 @@ def train(args=get_args()):
     diff_logger = Logger(diff_log_dirs, diff_output_config)
     diff_logger.log_hyperparameters(vars(args))
 
-    diff_policy_trainer = DiffusionPolicyTrainer(
-        policy = diffusion_policy,
+    diff_policy_trainer = RcslPolicyTrainer(
+        policy = behavior_policy,
+        eval_env = env,
         offline_dataset = diff_dataset,
+        rollout_dataset = None,
+        goal = 1, # AutoregressivePolicy is not return-conditioned
         logger = diff_logger,
         seed = args.seed,
         epoch = args.behavior_epoch,
         batch_size = args.behavior_batch,
-        lr_scheduler = diff_lr_scheduler,
+        offline_ratio = 1.,
+        lr_scheduler = lr_scheduler,
         horizon = args.horizon,
         num_workers = args.num_workers,
-        has_terminal = False,
+        eval_episodes = 10,
+        binary_return=True,
     )
 
     # Training helper functions
@@ -328,10 +348,10 @@ def train(args=get_args()):
             print(f"Load behavior policy from {args.load_diffusion_path}")
             with open(args.load_diffusion_path, 'rb') as f:
                 state_dict = torch.load(f, map_location= args.device)
-            diffusion_policy.load_state_dict(state_dict)
+            behavior_policy.load_state_dict(state_dict)
         else:
-            print(f"Train diffusion behavior policy")
-            diff_policy_trainer.train() # save checkpoint periodically
+            print(f"Train behavior policy")
+            diff_policy_trainer.train(last_eval=True) # save checkpoint periodically
 
     def get_rollout_trajs(logger: Logger, threshold = 0.9) -> Tuple[Dict[str, np.ndarray], float]:
         '''
@@ -379,7 +399,7 @@ def train(args=get_args()):
             for epoch in range(start_epoch, args.rollout_epoch):
                 batch_indexs = np.random.randint(0, init_obss_dataset.shape[0], size=args.rollout_batch)
                 init_obss = init_obss_dataset[batch_indexs]
-                rollout_data, rollout_info = rollout_simple(init_obss, dynamics, diffusion_policy, args.horizon)
+                rollout_data, rollout_info = rollout_simple(init_obss, dynamics, behavior_policy, args.horizon)
                     # print(pred_state)
 
                 # Only keep trajs with returns > threshold

@@ -69,14 +69,16 @@ def load_dataset(data_path):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_file', type=str, default=None,help='./dataset/maze2_smdacc_.dat')
-    parser.add_argument('--horizon', type=int, default=300)
-    parser.add_argument('--debug', action='store_true')
-    parser.add_argument('--render', action='store_true')
-    parser.add_argument('--maze_config_file', type=str, default='./config/maze2_simple_moredata.json')
+    # env config (general)
+    parser.add_argument('--data_dir', type=str, required=True)
+    parser.add_argument('--horizon', type=int, default=200, help="max path length for pickplace")
+
+    # env config (pointmaze)
+    parser.add_argument('--maze_config_file', type=str, default='envs/pointmaze/config/maze_default.json')
+    parser.add_argument('--data_file', type=str, default='pointmaze.dat')
 
     args = parser.parse_args()
     print(args)
 
-    create_env(args)
+    create_env_dataset(args)
 

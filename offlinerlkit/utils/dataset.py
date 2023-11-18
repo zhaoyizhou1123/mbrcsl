@@ -178,7 +178,7 @@ class TrajCtxFloatLengthDataset(Dataset):
         # pad 0
         states_slice = torch.cat([torch.zeros(pad_len, states_slice.shape[-1]), states_slice], dim = 0)
         actions_slice = torch.cat([torch.zeros(pad_len, actions_slice.shape[-1]), actions_slice], dim = 0)
-        rewards_slice = torch.cat([torch.zeros(pad_len, rewards_slice.shape[-1]), rtgs_slice], dim = 0)
+        rewards_slice = torch.cat([torch.zeros(pad_len, rewards_slice.shape[-1]), rewards_slice], dim = 0)
         rtgs_slice = torch.cat([torch.zeros(pad_len, rtgs_slice.shape[-1]), rtgs_slice], dim = 0)
 
         if self.single_timestep: # take the last step
@@ -292,7 +292,6 @@ class TrajCtxMixSampler:
                 if with_mask:
                     attn_mask = torch.cat([torch.zeros((pad_len)), torch.ones((ctx-pad_len))], dim=-1)
                     batch_mask.append(attn_mask.unsqueeze(0))
-        # print(batch_s[0].shape, batch_s[1].shape)
         batch_s = torch.cat(batch_s, dim=0)
         batch_a = torch.cat(batch_a, dim=0)
         batch_r = torch.cat(batch_r, dim=0)

@@ -11,8 +11,10 @@ from typing import Dict, Tuple
 from collections import defaultdict
 import datetime
 
-from offlinerlkit.modules import TransformerDynamicsModel
-from offlinerlkit.dynamics import TransformerDynamics
+from offlinerlkit.modules import EnsembleDynamicsModel
+from offlinerlkit.dynamics import EnsembleDynamics
+from offlinerlkit.utils.termination_fns import get_termination_fn
+from offlinerlkit.utils.scaler import StandardScaler
 from offlinerlkit.utils.roboverse_utils import PickPlaceObsWrapper, DoubleDrawerObsWrapper, get_pickplace_dataset, get_doubledrawer_dataset
 from offlinerlkit.utils.logger import Logger, make_log_dirs
 from offlinerlkit.policy_trainer import RcslPolicyTrainer, DiffusionPolicyTrainer
@@ -29,7 +31,7 @@ doubledrawercloseopen, horizon=80, behavior_epoch=40
 def get_args():
     parser = argparse.ArgumentParser()
     # general
-    parser.add_argument("--algo_name", type=str, default="mbrcsl")
+    parser.add_argument("--algo-name", type=str, default="mbrcsl_mlpdyn")
     parser.add_argument("--task", type=str, default="pickplace", help="task name")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--num_workers", type=int, default=1, help="Dataloader workers, align with cpu number")
@@ -41,11 +43,11 @@ def get_args():
     parser.add_argument('--horizon', type=int, default=40, help="max path length for pickplace")
 
     # transformer_autoregressive dynamics
-    parser.add_argument("--n_layer", type=int, default=4)
-    parser.add_argument("--n_head", type=int, default=4)
-    parser.add_argument("--n_embd", type=int, default=32)
     parser.add_argument("--dynamics_lr", type=float, default=1e-3)
-    parser.add_argument("--dynamics_epoch", type=int, default=80)
+    parser.add_argument("--dynamics_hidden_dims", type=int, nargs='*', default=[200, 200, 200, 200])
+    parser.add_argument("--dynamics_weight_decay", type=float, nargs='*', default=[2.5e-5, 5e-5, 7.5e-5, 7.5e-5, 1e-4])
+    parser.add_argument("--n_ensemble", type=int, default=7)
+    parser.add_argument("--n_elites", type=int, default=5)
     parser.add_argument("--load_dynamics_path", type=none_or_str, default=None)
 
     # Behavior policy (diffusion)
@@ -58,7 +60,7 @@ def get_args():
     
     # Rollout 
     parser.add_argument('--rollout_ckpt_path', type=none_or_str, default=None, help="file dir, used to load/store rollout trajs" )
-    parser.add_argument('--rollout_epoch', type=int, default=1000, help="Max number of epochs to rollout the policy")
+    parser.add_argument('--rollout_epoch', type=int, default=200, help="Max number of epochs to rollout the policy")
     parser.add_argument('--num_need_traj', type=int, default=5000, help="Needed valid trajs in rollout")
     parser.add_argument("--rollout-batch", type=int, default=200, help="Number of trajs to be sampled at one time")
 
@@ -74,7 +76,7 @@ def get_args():
 
 def rollout_simple(
     init_obss: np.ndarray,
-    dynamics: TransformerDynamicsModel,
+    dynamics,
     rollout_policy: SimpleDiffusionPolicy,
     rollout_length: int
 ) -> Tuple[Dict[str, np.ndarray], Dict]:
@@ -242,30 +244,26 @@ def train(args=get_args()):
     logger = Logger(log_dirs, output_config)
     logger.log_hyperparameters(vars(args))
 
-    dynamics_model = TransformerDynamicsModel(
+    dynamics_model = EnsembleDynamicsModel(
         obs_dim=obs_dim,
-        act_dim=action_dim,
-        obs_min = -1,
-        obs_max = 1,
-        act_min = -1,
-        act_max = 1,
-        r_min = 0,
-        r_max = 1,
-        ckpt_dir = logger.checkpoint_dir,
-        device = args.device,
-        n_layer = args.n_layer,
-        n_head = args.n_head,
-        n_embd = args.n_embd
+        action_dim=action_dim,
+        hidden_dims=args.dynamics_hidden_dims,
+        num_ensemble=args.n_ensemble,
+        num_elites=args.n_elites,
+        weight_decays=args.dynamics_weight_decay,
+        device=args.device
     )
-    
-    dynamics_optim = dynamics_model.configure_optimizer(
-        lr = args.dynamics_lr,
-        weight_decay= 0. ,
-        betas = (0.9, 0.999)
+    dynamics_optim = torch.optim.Adam(
+        dynamics_model.parameters(),
+        lr=args.dynamics_lr
     )
-    dynamics = TransformerDynamics(
+    scaler = StandardScaler()
+    termination_fn = get_termination_fn(task=args.task)
+    dynamics = EnsembleDynamics(
         dynamics_model,
         dynamics_optim,
+        scaler,
+        termination_fn
     )
 
     # create rollout policy
@@ -315,7 +313,7 @@ def train(args=get_args()):
             dynamics.load(args.load_dynamics_path)
         else: 
             print(f"Train dynamics")
-            dynamics.train(dyn_dataset, logger, max_epochs=args.dynamics_epoch)
+            dynamics.train(dyn_dataset, logger)
         
     def get_rollout_policy():
         '''

@@ -4,7 +4,6 @@ import os
 import random
 import pickle
 import datetime
-import roboverse
 
 import numpy as np
 import torch

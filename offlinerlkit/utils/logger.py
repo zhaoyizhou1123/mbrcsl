@@ -131,7 +131,7 @@ class JSONOutputHandler(KVWriter):
                 else:
                     # otherwise, a value is a numpy array, serialize as a list or nested lists
                     kvs[key] = value.tolist()
-        self.file.write(json.dumps(kvs) + '\n')
+        self.file.write(json.dumps(kvs, indent=2) + '\n')
         self.file.flush()
 
     def close(self) -> None:
